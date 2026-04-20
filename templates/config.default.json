@@ -1,0 +1,60 @@
+{
+  "_comment": "LoreLake configuration. Defaults shown here apply when a key is omitted from the project's config.json.",
+  "_schemaVersion": 1,
+
+  "llake": {
+    "_comment": "LoreLake-wide constants.",
+    "fixedCategories": ["discussions", "decisions", "gotchas", "playbook"]
+  },
+
+  "sessionCapture": {
+    "_comment": "Two-pass session capture: cheap triage → full capture on CAPTURE/PARTIAL.",
+    "enabled": true,
+    "triageModel": "sonnet",
+    "triageEffort": "high",
+    "triageBudgetUsd": 0.50,
+    "captureModel": "sonnet",
+    "captureEffort": "high",
+    "maxBudgetUsd": 5.00,
+    "timeoutSeconds": 600,
+    "minTurns": 2,
+    "minWords": 150,
+    "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+    "writableCategories": ["discussions", "decisions", "gotchas", "playbook"],
+    "lockStalenessSeconds": 900
+  },
+
+  "ingest": {
+    "_comment": "Post-merge agent that updates wiki from code changes on the monitored branch.",
+    "enabled": true,
+    "model": "opus",
+    "effort": "high",
+    "maxBudgetUsd": 10.00,
+    "timeoutSeconds": 1200,
+    "branch": "main",
+    "include": ["src/", "package.json", "tsconfig.*"],
+    "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
+  },
+
+  "transcript": {
+    "_comment": "Transcript extraction & sampling.",
+    "maxMessageLength": 2000,
+    "headSize": 10,
+    "tailSize": 20,
+    "middleMaxSize": 30,
+    "middleScaleStart": 100
+  },
+
+  "logging": {
+    "_comment": "Hook log rotation for llake/.state/hooks.log.",
+    "maxLines": 1000,
+    "rotateKeepLines": 500
+  },
+
+  "prompts": {
+    "_comment": "Per-prompt custom slot overrides. Empty/missing → template falls back to shipped defaults.",
+    "ingest": {
+      "EXAMPLES": ""
+    }
+  }
+}

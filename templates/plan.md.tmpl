@@ -1,0 +1,95 @@
+# LoreLake Install Plan — {{PROJECT_NAME}}
+
+> Generated: {{DATE}}
+> Plugin install: {{PLUGIN_PATH}}
+> Project root: {{PROJECT_ROOT}}
+
+This plan installs LoreLake into `{{PROJECT_ROOT}}/llake/`. Execute it once. It is idempotent — re-running is safe and skips already-completed steps. On interrupt, resume by re-running and logging into `{{PROJECT_ROOT}}/llake/log.md`.
+
+Each phase appends a completion entry to `log.md`. Resumption: read the log tail; continue from the next unfinished phase.
+
+---
+
+## Phase 1 — Create LoreLake structure
+
+- [ ] Create directory `{{PROJECT_ROOT}}/llake/`
+- [ ] Write `{{PROJECT_ROOT}}/llake/config.json` with the embedded config (see "Embedded config" section at the bottom of this file)
+- [ ] Create empty subdirs: `wiki/`, `wiki/discussions/`, `wiki/decisions/`, `wiki/gotchas/`, `wiki/playbook/`, `.state/`, `.state/agents/`, `.state/sessions/`
+- [ ] Create stub category index files:
+  - `wiki/discussions/discussions.md` with frontmatter and a placeholder "no entries yet"
+  - `wiki/decisions/decisions.md` (same)
+  - `wiki/gotchas/gotchas.md` (same)
+  - `wiki/playbook/playbook.md` (same)
+- [ ] Create `{{PROJECT_ROOT}}/llake/index.md` from `{{PLUGIN_PATH}}/templates/index.md.tmpl` with substitutions: `PROJECT_NAME={{PROJECT_NAME}}`, `DATE={{DATE}}`
+- [ ] Create empty `{{PROJECT_ROOT}}/llake/log.md` (will be appended throughout this plan)
+- [ ] Create `{{PROJECT_ROOT}}/llake/last-ingest-sha`:
+  - If git repo: write `git -C {{PROJECT_ROOT}} rev-parse HEAD`
+  - If not git: write empty file
+- [ ] **Append to `{{PROJECT_ROOT}}/llake/log.md`:**
+  ```
+  ## [{{DATE}}] install-plan | Phase 1 complete: structure created
+  ```
+
+## Phase 2 — Update .gitignore
+
+- [ ] Read `{{PROJECT_ROOT}}/.gitignore` (create if missing)
+- [ ] If `llake/.state/` is NOT already in the file, append:
+  ```
+  llake/.state/
+  ```
+- [ ] **Append to `{{PROJECT_ROOT}}/llake/log.md`:**
+  ```
+  ## [{{DATE}}] install-plan | Phase 2 complete: gitignore updated
+  ```
+
+## Phase 3 — Wire git post-merge hook
+
+- [ ] If `{{PROJECT_ROOT}}/.git/` exists:
+  - Write to `{{PROJECT_ROOT}}/.git/hooks/post-merge`:
+    ```
+    #!/bin/bash
+    exec "{{PLUGIN_PATH}}/hooks/post-merge.sh" "$@"
+    ```
+  - Run: `chmod +x {{PROJECT_ROOT}}/.git/hooks/post-merge`
+- [ ] If not a git repo:
+  - Print warning: "Not a git repository. Post-merge ingest will not work until you run `git init` then `/llake-doctor`."
+  - Do NOT fail the plan
+- [ ] **Append to `{{PROJECT_ROOT}}/llake/log.md`:**
+  ```
+  ## [{{DATE}}] install-plan | Phase 3 complete: post-merge wired (or deferred)
+  ```
+
+## Phase 4 — Register Claude Code hooks (global)
+
+- [ ] Read `~/.claude/settings.json` (create with `{}` if missing)
+- [ ] Ensure the `hooks.SessionStart` array contains an entry pointing at `{{PLUGIN_PATH}}/hooks/session-start.sh`. If not present, add it.
+- [ ] Ensure the `hooks.SessionEnd` array contains an entry pointing at `{{PLUGIN_PATH}}/hooks/session-end.sh`. If not present, add it.
+- [ ] Write the updated settings file.
+- [ ] **Append to `{{PROJECT_ROOT}}/llake/log.md`:**
+  ```
+  ## [{{DATE}}] install-plan | Phase 4 complete: CC hooks registered
+  ```
+
+## Phase 5 — Verify install
+
+- [ ] Invoke `/llake-doctor`
+- [ ] Resolve any reported issues
+- [ ] **Append to `{{PROJECT_ROOT}}/llake/log.md`:**
+  ```
+  ## [{{DATE}}] install-plan | Phase 5 complete: doctor passed
+  ```
+
+## Phase 6 — Ready for bootstrap (recommended)
+
+- [ ] When ready to populate the wiki, invoke `/llake-bootstrap`
+- [ ] (This phase does NOT log here — bootstrap logs its own entry)
+
+---
+
+## Embedded config
+
+The contents of `{{PROJECT_ROOT}}/llake/config.json`:
+
+```json
+{{EMBEDDED_CONFIG}}
+```
