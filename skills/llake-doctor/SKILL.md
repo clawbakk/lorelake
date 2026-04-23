@@ -78,26 +78,34 @@ When `.git/` does exist, verify three things:
 
 Record issues separately for each failure so the report distinguishes "missing", "drifted", and "not executable".
 
-### Check 4 — Claude Code hook registrations
+### Check 4 — Plugin manifest integrity
 
-SessionStart and SessionEnd are registered in Claude Code's JSON settings. Either location is acceptable:
+The CC plugin runtime wires `SessionStart`/`SessionEnd` from `$PLUGIN_ROOT/hooks/hooks.json`. Verify:
 
-- Global: `~/.claude/settings.json`
-- Project: `<project>/.claude/settings.json`
+- `$PLUGIN_ROOT/hooks/hooks.json` — exists and is valid JSON.
+- `hooks.SessionStart[*].hooks[*].command` — at least one entry resolves (after substituting `${CLAUDE_PLUGIN_ROOT}` with `$PLUGIN_ROOT`) to the existing file `$PLUGIN_ROOT/hooks/session-start.sh`.
+- `hooks.SessionEnd[*].hooks[*].command` — same pattern, resolving to `$PLUGIN_ROOT/hooks/session-end.sh`.
 
-For each of the two hook events (`SessionStart`, `SessionEnd`), the check passes if **any** entry in `hooks.<event>` across either settings file has a command that references the plugin's actual script — either `$PLUGIN_ROOT/hooks/session-start.sh` or `$PLUGIN_ROOT/hooks/session-end.sh` respectively. Claude Code's hook entries are objects with a `hooks` array; the command is found at `hooks[*].command`. Walk the structure and match on the absolute path to this plugin's script.
+Record a distinct issue per failure — "missing manifest", "invalid JSON", "SessionStart not declared", "SessionEnd not declared", "command resolves to missing file". A corrupted or partial manifest is not something doctor repairs (it is immutable plugin code, not user data); the fix prints a pointer to reinstall the plugin instead of modifying `hooks/hooks.json`.
 
-A match at **either** settings location is a pass. If neither has it, record a "missing" issue; the fix writes the entry to `~/.claude/settings.json` (matching the install plan's default — project-local settings are a user preference, never something doctor creates unprompted).
+### Check 5 — Stale manual hook entries (migration cleanup)
 
-If an entry exists but points at a *different* plugin path (e.g., stale copy of this plugin from before a move), record a "drifted" issue; the fix rewrites that entry's command to the current `$PLUGIN_ROOT`.
+Before the plugin manifest migration, the installer wrote entries to `~/.claude/settings.json`. Any such entry is now stale — the plugin manifest already fires the hook, and the stale entry fires it a second time per session. Scan both:
 
-### Check 5 — Config schema version
+- `~/.claude/settings.json`
+- `<project>/.claude/settings.json`
+
+In each file that exists, walk `hooks.SessionStart` and `hooks.SessionEnd` and look for entries whose `hooks[*].command` references this plugin's scripts (match on a command that ends in `hooks/session-start.sh` or `hooks/session-end.sh` and contains `$PLUGIN_ROOT` — or any prior plugin path, if you can detect one by the script basename alone). Record a "stale entry" issue per match, carrying the settings-file path, the event name, and enough information to identify the exact entry for removal.
+
+Leave unrelated entries (other plugins' hooks, user-owned hooks) untouched.
+
+### Check 6 — Config schema version
 
 Read `_schemaVersion` from `<project>/llake/config.json` and from `$PLUGIN_ROOT/templates/config.default.json`. If the user's is strictly less than the plugin's, record a "needs upgrade" issue. If the user's is greater (downgrade), record a "newer than plugin" warning — do NOT forward-merge in that direction; the user is likely running a newer plugin elsewhere.
 
-Schema version mismatch by itself is not a fix target — it becomes one paired with Check 6 (what keys to merge).
+Schema version mismatch by itself is not a fix target — it becomes one paired with Check 7 (what keys to merge).
 
-### Check 6 — Config key coverage
+### Check 7 — Config key coverage
 
 For each leaf key in `$PLUGIN_ROOT/templates/config.default.json`, test whether the same dot-path resolves in the user's `<project>/llake/config.json`. A "leaf key" is any non-object value except `_comment` annotations — `_comment` fields are documentation, not config, and the plugin's defaults own them so the user never has to carry stale copies.
 
@@ -156,39 +164,33 @@ exec "<$PLUGIN_ROOT absolute path>/hooks/post-merge.sh" "$@"
 
 Substitute the resolved absolute `$PLUGIN_ROOT` literally. Then `chmod +x` the file. Writing the full contents (rather than patching) resolves "missing", "drifted", and "not executable" in one operation.
 
-### Fix — Register Claude Code hooks
+### Fix — Plugin manifest integrity
 
-Target `~/.claude/settings.json`. If the file is missing, create it with `{}`. Read it as JSON.
+If Check 4 recorded an issue, this fix does not modify `hooks/hooks.json` — the manifest is plugin code, not user data. Emit a single report line instructing the user to reinstall the plugin (for example, "Plugin manifest at `$PLUGIN_ROOT/hooks/hooks.json` is corrupted or incomplete. Reinstall the plugin."). Continue with remaining fixes; this one is diagnostic-only.
 
-For each missing or drifted event (`SessionStart`, `SessionEnd`):
+### Fix — Remove stale manual hook entries
 
-- Ensure `hooks` is an object; create it if absent.
-- Ensure `hooks.<event>` is an array; create it if absent.
-- If no existing entry in that array references the plugin's correct script, append a new entry of the shape Claude Code expects:
-  ```json
-  {
-    "hooks": [
-      { "type": "command", "command": "<$PLUGIN_ROOT absolute path>/hooks/session-start.sh" }
-    ]
-  }
-  ```
-  with the command path pointing at `hooks/session-start.sh` for `SessionStart` and `hooks/session-end.sh` for `SessionEnd`.
-- If an existing entry references a stale plugin path, rewrite its `command` to the current `$PLUGIN_ROOT`. Do not create a second entry — duplicates would fire the hook twice per session.
+For each stale entry recorded by Check 5:
 
-Write the updated JSON back. Preserve all unrelated keys in the settings file — the user owns them.
+1. Read the affected settings file as JSON.
+2. Remove the specific entry (identified by settings-file path, event name, and matching command) from `hooks.<event>`.
+3. If removal leaves `hooks.<event>` as an empty array, leave the empty array in place — deleting it would surprise users who read their settings file by hand. Do not delete the `hooks` key either.
+4. Write the file back with the file's existing indentation where detectable, otherwise 2 spaces. Preserve all unrelated keys and all unrelated entries — the user owns them.
+
+Doctor never creates hook entries in settings files. The plugin manifest is the sole source of registration.
 
 ### Fix — Forward-merge missing config keys
 
-Only runs when Check 5 or Check 6 recorded issues. The merge is additive:
+Only runs when Check 6 or Check 7 recorded issues. The merge is additive:
 
 1. Load the user's `<project>/llake/config.json` and the plugin's `$PLUGIN_ROOT/templates/config.default.json`.
-2. For every dot-path missing in the user's config (the list from Check 6), copy the default value from the plugin's defaults into the user's config at the same path, creating intermediate objects as needed.
+2. For every dot-path missing in the user's config (the list from Check 7), copy the default value from the plugin's defaults into the user's config at the same path, creating intermediate objects as needed.
 3. Preserve every pre-existing user value. Preserve all `_comment` fields — the user's existing ones stay; any newly-introduced sections bring their `_comment` along from defaults so the in-file documentation stays current.
 4. Do NOT delete keys the user has that the defaults lack — those are user-managed leftovers from an older schema.
 5. After the merge, set the user's `_schemaVersion` to the plugin's `_schemaVersion`.
 6. Write the file back with 2-space indentation, matching the plugin's defaults file style.
 
-If Check 5 recorded "newer than plugin" instead of "needs upgrade", skip this fix entirely and let the warning surface in the report — doctor does not downgrade configs.
+If Check 6 recorded "newer than plugin" instead of "needs upgrade", skip this fix entirely and let the warning surface in the report — doctor does not downgrade configs.
 
 ---
 
@@ -207,8 +209,8 @@ Plugin:  /absolute/path/to/plugin
 [CHECK] LoreLake structure         : OK
 [CHECK] .gitignore                 : MISSING ENTRY
 [CHECK] Post-merge hook            : NOT WIRED (git repo present)
-[CHECK] CC SessionStart hook       : OK
-[CHECK] CC SessionEnd hook         : OK
+[CHECK] Plugin manifest            : OK
+[CHECK] Stale manual entries       : NONE
 [CHECK] Config schema version      : OK (1)
 [CHECK] Config key coverage        : 2 keys missing → merging from defaults
 
@@ -240,7 +242,7 @@ The report is the whole user-visible output. Do not narrate intermediate steps, 
 - **Bootstrapping wiki content.** Stub category indexes are the maximum — populating pages is `/llake-bootstrap`.
 - **Initial install.** If no `<project>/llake/` exists, doctor stops and directs the user to `/llake-lady`. It does not scaffold an install from nothing.
 - **Downgrading `_schemaVersion`.** If the user's config is newer than the plugin's, warn in the report and do nothing else.
-- **Writing to project-scoped CC settings.** Doctor only creates entries in `~/.claude/settings.json`. A match in `<project>/.claude/settings.json` is accepted as passing, but doctor does not write there — that would surprise users who prefer global-only settings.
+- **Creating hook entries in any settings file.** Plugin hooks are registered by the plugin manifest (`$PLUGIN_ROOT/hooks/hooks.json`); doctor never writes a new hook entry anywhere. Doctor *does* remove stale pre-migration entries from `~/.claude/settings.json` and `<project>/.claude/settings.json` — that is a one-way cleanup, not a registration channel.
 
 ## References
 
