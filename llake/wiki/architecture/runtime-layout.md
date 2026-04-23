@@ -101,10 +101,9 @@ The hook also handles its own rotation: when `log.md` exceeds `logging.maxLines`
 
 ### `last-ingest-sha`
 
-**Who writes it:** `hooks/post-merge.sh` (the shell script, **not** the agent). The hook writes the current HEAD SHA to this file in three situations:
+**Who writes it:** `hooks/post-merge.sh` (the shell script, **not** the agent). The hook writes the current HEAD SHA to this file in two situations:
 1. After a pre-flight diff determines no relevant files changed (advances the cursor without spawning an agent)
 2. After detecting an invalid commit range due to a force-push (resets to current HEAD)
-3. The ingest agent itself is expected to update it after successfully completing ingest — see `ingest.md.tmpl` for the agent's instruction to write the new SHA at the end of its run
 
 **Who reads it:** `post-merge.sh` on every invocation. The hook diffs `last-ingest-sha..HEAD` to determine what commits to pass to the agent.
 

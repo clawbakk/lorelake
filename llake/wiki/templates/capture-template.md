@@ -20,7 +20,7 @@ The capture agent runs only when the triage agent returns `CAPTURE` or `PARTIAL`
 
 ## Placeholders
 
-The capture template uses eight `{{VAR}}` placeholders, all supplied as CLI KEY=value args by `session-end.sh`:
+The capture template uses nine `{{VAR}}` placeholders, all supplied as CLI KEY=value args by `session-end.sh`:
 
 | Placeholder | Filled by | Value |
 |---|---|---|

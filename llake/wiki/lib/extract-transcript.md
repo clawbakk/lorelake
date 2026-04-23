@@ -164,6 +164,8 @@ The `.words` sidecar receives this total. The session-end hook reads it and comp
 
 | Symbol | Location |
 |---|---|
+| `read_all_messages(path)` | `hooks/lib/extract_transcript.py:29` |
+| `get_content(msg)` | `hooks/lib/extract_transcript.py:47` |
 | `is_visible(msg)` | `hooks/lib/extract_transcript.py:55-84` |
 | `is_continuation(msg)` | `hooks/lib/extract_transcript.py:87-95` |
 | `filter_visible(messages)` | `hooks/lib/extract_transcript.py:98-100` |

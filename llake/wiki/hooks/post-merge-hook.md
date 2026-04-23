@@ -249,7 +249,7 @@ A skipped run looks like:
 
 | Event | SHA file state |
 |---|---|
-| Initial bootstrap | Written by bootstrap agent or manually seeded |
+| Initial bootstrap | Written by bootstrap skill or manually seeded |
 | Successful ingest | Advanced to `CURRENT_SHA` by the ingest agent |
 | Failed / killed ingest | Unchanged — next run re-processes the range |
 | Force push (invalid range) | Reset to `HEAD` immediately by the hook, skipping the agent |

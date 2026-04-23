@@ -234,7 +234,7 @@ In a monorepo, the index extends one level deeper. See the monorepo layout secti
 
 ## Monorepo layout
 
-A project is treated as a monorepo when two or more project marker files exist at non-root paths. Marker files include: `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `pom.xml`, `build.gradle`, `composer.json`, `Gemfile`, `*.csproj`, and equivalents across all major ecosystems.
+A project is treated as a monorepo when two or more project marker files exist at non-root paths. Marker files include: `package.json`, `pyproject.toml`, `setup.py`, `setup.cfg`, `Cargo.toml`, `go.mod`, `pom.xml`, `build.gradle`, `build.gradle.kts`, `composer.json`, `Gemfile`, `*.csproj`, `*.fsproj`, `mix.exs`, `Project.toml`, `pubspec.yaml`, `Package.swift`, `BUILD`, `BUILD.bazel`, `dune-project`, `stack.yaml`, `cabal.project`, and equivalents across all major ecosystems.
 
 Once detected as a monorepo, the wiki adopts nested layout **permanently**, regardless of how many packages currently exist. Restructuring later (renaming pages, rewriting wikilinks, re-indexing) is expensive — commit to the structure on first detection.
 

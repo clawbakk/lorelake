@@ -83,3 +83,9 @@ Pages affected: [[session-end-hook]], [[post-merge-hook]], [[llake-doctor-skill]
 Populated 32 pages across 7 new categories (architecture, hooks, lib, templates, config, schema, skills) plus 9 pages in the 3 fixed categories (decisions, gotchas, playbook). Scope: hooks/, schema/, skills/, templates/, tests/. Future commits on the configured branch (main) will be processed automatically by the post-merge ingest hook.
 
 Pages affected: 32 total (see category indexes)
+
+## [2026-04-23] lint | comprehensive | 36 issues found, 5 fixed, 31 deferred
+
+Full audit across 47 pages in 9 categories. 8 diagnosis subagents dispatched in parallel. Quick checks clean on index sync and frontmatter. Fixed 1 factual contradiction (runtime-layout last-ingest-sha ownership), 1 terminology drift (bootstrap agent → skill in post-merge-hook), and 3 Standard 1 coherence issues (capture-template placeholder count, page-format monorepo marker list, extract-transcript Code References table). Deferred: 2 orphan playbook pages (navigable via index), 24 intentional documentation-example wikilinks, and 5 minor Standard 1 line-ref warnings.
+
+Pages affected: [[runtime-layout]], [[post-merge-hook]], [[capture-template]], [[page-format]], [[extract-transcript]]
