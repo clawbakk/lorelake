@@ -1,0 +1,9 @@
+{
+  "name": "clawbakk",
+  "plugins": [
+    {
+      "name": "lorelake",
+      "source": "."
+    }
+  ]
+}
