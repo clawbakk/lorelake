@@ -52,6 +52,9 @@ def test_plugin_has_author_object():
     assert isinstance(author, dict), "plugin.json author must be an object"
     assert author.get("name"), "author.name must be non-empty"
     assert author.get("email"), "author.email must be non-empty"
+    assert author["email"].endswith("@users.noreply.github.com"), (
+        f"author.email must use the GitHub noreply address, got {author['email']!r}"
+    )
     assert author.get("url"), "author.url must be non-empty"
     assert author["url"].startswith("https://"), (
         f"author.url must be an https URL, got {author['url']!r}"
@@ -65,6 +68,9 @@ def test_plugin_has_repo_homepage_bugs():
         assert isinstance(value, str) and value.startswith("https://github.com/"), (
             f"plugin.json {field} must be an https://github.com/... URL, got {value!r}"
         )
+    assert data.get("homepage", "").endswith("#readme"), (
+        f"homepage must end with #readme anchor, got {data.get('homepage')!r}"
+    )
 
 
 def test_plugin_has_keywords_including_karpathy():
