@@ -59,27 +59,16 @@ Each phase appends a completion entry to `log.md`. Resumption: read the log tail
   ## [{{DATE}}] install-plan | Phase 3 complete: post-merge wired (or deferred)
   ```
 
-## Phase 4 — Register Claude Code hooks (global)
-
-- [ ] Read `~/.claude/settings.json` (create with `{}` if missing)
-- [ ] Ensure the `hooks.SessionStart` array contains an entry pointing at `{{PLUGIN_PATH}}/hooks/session-start.sh`. If not present, add it.
-- [ ] Ensure the `hooks.SessionEnd` array contains an entry pointing at `{{PLUGIN_PATH}}/hooks/session-end.sh`. If not present, add it.
-- [ ] Write the updated settings file.
-- [ ] **Append to `{{PROJECT_ROOT}}/llake/log.md`:**
-  ```
-  ## [{{DATE}}] install-plan | Phase 4 complete: CC hooks registered
-  ```
-
-## Phase 5 — Verify install
+## Phase 4 — Verify install
 
 - [ ] Invoke `/llake-doctor`
 - [ ] Resolve any reported issues
 - [ ] **Append to `{{PROJECT_ROOT}}/llake/log.md`:**
   ```
-  ## [{{DATE}}] install-plan | Phase 5 complete: doctor passed
+  ## [{{DATE}}] install-plan | Phase 4 complete: doctor passed
   ```
 
-## Phase 6 — Ready for bootstrap (recommended)
+## Phase 5 — Ready for bootstrap (recommended)
 
 - [ ] When ready to populate the wiki, invoke `/llake-bootstrap`
 - [ ] (This phase does NOT log here — bootstrap logs its own entry)
