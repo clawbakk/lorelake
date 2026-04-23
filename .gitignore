@@ -9,3 +9,4 @@ venv/
 .claude/
 docs/specs/
 docs/plans/
+llake/.state/

@@ -1,0 +1,69 @@
+{
+  "_comment": "LoreLake configuration. Defaults shown here apply when a key is omitted from the project's config.json.",
+  "_schemaVersion": 1,
+
+  "llake": {
+    "_comment": "LoreLake-wide constants.",
+    "fixedCategories": ["discussions", "decisions", "gotchas", "playbook"]
+  },
+
+  "sessionCapture": {
+    "_comment": "Two-pass session capture: cheap triage → full capture on CAPTURE/PARTIAL.",
+    "enabled": true,
+    "triageModel": "sonnet",
+    "triageEffort": "high",
+    "triageBudgetUsd": 0.50,
+    "captureModel": "sonnet",
+    "captureEffort": "high",
+    "maxBudgetUsd": 5.00,
+    "timeoutSeconds": 600,
+    "minTurns": 2,
+    "minWords": 150,
+    "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+    "writableCategories": ["discussions", "decisions", "gotchas", "playbook"],
+    "lockStalenessSeconds": 900
+  },
+
+  "ingest": {
+    "_comment": "Post-merge agent that updates wiki from code changes on the monitored branch.",
+    "enabled": true,
+    "model": "opus",
+    "effort": "high",
+    "maxBudgetUsd": 10.00,
+    "timeoutSeconds": 1200,
+    "branch": "main",
+    "include": ["hooks/", "schema/", "skills/", "templates/", "tests/"],
+    "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
+  },
+
+  "lint": {
+    "_comment": "On-demand `/llake-lint` skill. Quick mode runs in-session and inherits the parent session's model/limits; these knobs apply only to Comprehensive-mode subagents and to the no-arg recommendation heuristic.",
+    "model": "sonnet",
+    "effort": "high",
+    "comprehensive-recommended-after-days": 14,
+    "comprehensive-recommended-after-activity": 20,
+    "stale-threshold-days": 30
+  },
+
+  "transcript": {
+    "_comment": "Transcript extraction & sampling.",
+    "maxMessageLength": 2000,
+    "headSize": 10,
+    "tailSize": 20,
+    "middleMaxSize": 30,
+    "middleScaleStart": 100
+  },
+
+  "logging": {
+    "_comment": "Hook log rotation for llake/.state/hooks.log.",
+    "maxLines": 1000,
+    "rotateKeepLines": 500
+  },
+
+  "prompts": {
+    "_comment": "Per-prompt custom slot overrides. Empty/missing → template falls back to shipped defaults.",
+    "ingest": {
+      "EXAMPLES": "### Portability fix that IS a gotcha\nCommit: `fix: replace $BASHPID with $$ in agent-run.sh for bash 3.2 compat`\nDiff reveals: $BASHPID is a bash 4+ feature; macOS ships bash 3.2, so all hook shell code must stay within bash 3.2. The fix substitutes $$ for process-tracking logic.\n**Semantic value**: teaches the macOS bash 3.2 portability constraint that applies to all hook shell code. Future contributors using bash 4+ syntax will hit this immediately.\nAction: create or update a `gotchas/` entry on bash 3.2 portability constraints; link to `hooks/lib/agent-run.sh`; enumerate the specific forbidden features ($BASHPID, associative arrays, etc.).\n\n### New placeholder wired through renderer and hook\nCommit: `feat: add {{KEY|fallback:path}} file-read syntax to render-prompt.py`\nDiff reveals: a new fallback branch in the placeholder substitution loop in `hooks/lib/render-prompt.py`; updated callers in hook shell scripts that pass `--templates-dir`; a new unit test in `tests/lib/test_render_prompt.py`.\n**Semantic value**: a new integration point — every new {{VAR}} must be wired in both the caller (hook script) and the template, or the renderer exits nonzero. The fallback path is resolved relative to --templates-dir, not cwd — a subtle invariant.\nAction: update the render-prompt playbook page; note the strict-exit behavior and the wiring contract; cross-link from hook pages that use the new syntax.\n\n### Config key added with deliberate defaults\nCommit: `feat: add lint section to config.default.json`\nDiff reveals: a new top-level `lint` key in `templates/config.default.json` with model/effort/threshold sub-keys; `hooks/lib/read-config.py` picks them up via existing dot-key lookup with no code changes.\n**Semantic value**: the threshold values (14 days, 20 activity events, 30 stale days) are deliberate tuning choices with rationale worth capturing so future maintainers don't tweak them blindly.\nAction: update the config reference page in the playbook; create an ADR in `decisions/` documenting threshold rationale; cross-link to the /llake-lint skill spec."
+    }
+  }
+}
