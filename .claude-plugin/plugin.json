@@ -16,8 +16,7 @@
     "knowledge-base",
     "project-context",
     "auto-documentation",
-    "markdown",
-    "karpathy"
+    "markdown"
   ],
   "license": "MIT"
 }

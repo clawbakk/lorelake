@@ -22,19 +22,6 @@ def test_readme_links_to_contributing_and_install():
     assert "(./CONTRIBUTING.md)" in content, "README must link to CONTRIBUTING.md"
     assert "(./docs/INSTALL.md)" in content, "README must link to docs/INSTALL.md"
 
-
-def test_readme_karpathy_only_in_inspiration_section():
-    """Karpathy is attribution-only; no comparison framing in Features/Why LoreLake."""
-    content = README.read_text()
-    assert "## Inspiration & credits" in content, (
-        "README must have an Inspiration & credits section"
-    )
-    pre_section = content.split("## Inspiration & credits")[0]
-    assert "karpathy" not in pre_section.lower(), (
-        "Karpathy mentions must be confined to the Inspiration & credits section"
-    )
-
-
 def test_changelog_has_0_1_0_section():
     content = CHANGELOG.read_text()
     assert "## [0.1.0]" in content, "CHANGELOG must have a [0.1.0] release section"

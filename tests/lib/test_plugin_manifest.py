@@ -73,11 +73,11 @@ def test_plugin_has_repo_homepage_bugs():
     )
 
 
-def test_plugin_has_keywords_including_karpathy():
+def test_plugin_has_keywords():
     data = json.loads(PLUGIN_META.read_text())
     keywords = data.get("keywords")
     assert isinstance(keywords, list) and keywords, "keywords must be a non-empty array"
-    for required in ("claude-code", "wiki", "karpathy"):
+    for required in ("claude-code", "wiki"):
         assert required in keywords, (
             f"keywords must include {required!r}, got {keywords!r}"
         )
