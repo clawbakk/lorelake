@@ -1,0 +1,5 @@
+{
+  "name": "lorelake",
+  "version": "0.1.0",
+  "description": "Compounding project wiki for Claude Code — auto-updated by hooks on merges and session ends."
+}
