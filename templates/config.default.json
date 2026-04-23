@@ -36,6 +36,15 @@
     "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
   },
 
+  "lint": {
+    "_comment": "On-demand `/llake-lint` skill. Quick mode runs in-session and inherits the parent session's model/limits; these knobs apply only to Comprehensive-mode subagents and to the no-arg recommendation heuristic.",
+    "model": "sonnet",
+    "effort": "high",
+    "comprehensive-recommended-after-days": 14,
+    "comprehensive-recommended-after-activity": 20,
+    "stale-threshold-days": 30
+  },
+
   "transcript": {
     "_comment": "Transcript extraction & sampling.",
     "maxMessageLength": 2000,

@@ -1,6 +1,6 @@
 ---
 name: llake-lady
-description: LoreLake Lady — install wizard that sets up LoreLake in the user's current project. Runs an eight-phase flow (prereq check, discovery, auto-vs-interactive mode selection, config rendering, install-plan generation, optional plan review, executor-subagent dispatch, completion summary). Invoked only when the user explicitly types `/llake-lady`. Does NOT populate wiki content (`/llake-bootstrap`) and does NOT diagnose existing installs (`/llake-doctor`).
+description: Use when installing LoreLake into a project for the first time. Invoked via /llake-lady.
 disable-model-invocation: true
 ---
 
