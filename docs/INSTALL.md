@@ -92,7 +92,7 @@ After any update, run `/llake-doctor` in each tracked project to reconcile new c
 Globally:
 
 ```
-/plugin uninstall lorelake
+/plugin uninstall lorelake@clawbakk
 ```
 
 Per project: nothing automatic removes `<project>/llake/`. It is your data — delete it yourself if you want to stop tracking the project. The `.git/hooks/post-merge` shim fails silently if the plugin directory is no longer present — git ignores the exit code of post-merge hooks, so `git pull` continues unaffected.

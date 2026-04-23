@@ -82,11 +82,10 @@ def test_no_git_plus_https_install_syntax_in_user_docs():
 
 
 def test_plugin_install_lorelake_uses_clawbakk_marketplace():
-    """Every `/plugin install lorelake` or `/plugin update lorelake` must be
-    qualified with `@clawbakk` once the marketplace manifest ships — the bare
-    form doesn't resolve.
+    """Every `/plugin install|update|uninstall lorelake` must be qualified with
+    `@clawbakk` once the marketplace manifest ships — the bare form doesn't resolve.
     """
-    pattern = re.compile(r"/plugin (?:install|update) lorelake(?!@clawbakk)")
+    pattern = re.compile(r"/plugin (?:install|update|uninstall) lorelake(?!@clawbakk)")
     offenders = []
     for rel in ("README.md", "docs/INSTALL.md"):
         path = REPO_ROOT / rel
