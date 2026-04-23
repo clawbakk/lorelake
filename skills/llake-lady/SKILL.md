@@ -165,10 +165,10 @@ Rules:
 3. Execute phases in the order they appear in the plan (Phase 1 → 6). Each checkbox within a phase is an instruction; checkbox updates in the plan file are optional, the log is the source of truth.
 4. After each PHASE completes (not each checkbox), append the exact log line specified at the end of that phase to <project>/llake/log.md. The format is a "## [YYYY-MM-DD] install-plan | Phase N complete: <short description>" heading.
 5. Write surface: <project>/llake/**, <project>/.gitignore, and <project>/.git/hooks/post-merge. Do NOT write anywhere else. Claude Code hook registration is handled by the plugin manifest, not the installer.
-6. Phase 5 invokes /llake-doctor. Invoke that skill via the Skill tool available in this session. If doctor reports issues, surface its full report verbatim in your summary.
-7. Phase 6 is informational — do NOT run /llake-bootstrap. Bootstrap is the user's next step, not yours.
+6. Phase 4 invokes /llake-doctor. Invoke that skill via the Skill tool available in this session. If doctor reports issues, surface its full report verbatim in your summary.
+7. Phase 5 is informational — do NOT run /llake-bootstrap. Bootstrap is the user's next step, not yours.
 
-When done, print a concise summary: the paths you wrote, any warnings (non-git repo, skipped steps, etc.), and the doctor report from Phase 5.
+When done, print a concise summary: the paths you wrote, any warnings (non-git repo, skipped steps, etc.), and the doctor report from Phase 4.
 ```
 
 Substitute the three absolute paths into `<PLAN_PATH>`, `<absolute path to project>`, and `<absolute path to plugin>` in the prompt.
@@ -184,12 +184,12 @@ Print a concise summary that always names:
 - **Install plan:** `<absolute path to install-plan.md>`
 - **Config:** `<project>/llake/config.json`
 - **Log:** `<project>/llake/log.md` (records each phase the executor completed; the tail is a resume cursor)
-- **Doctor:** the report the executor surfaced from Phase 5 of the plan (or a note that doctor reported zero issues)
+- **Doctor:** the report the executor surfaced from Phase 4 of the plan (or a note that doctor reported zero issues)
 - **Next recommended step:** `/llake-bootstrap` when the user is ready to populate the initial wiki.
 
 If the project was not a git repo, also remind the user: "Run `git init`, then `/llake-doctor`, to finish wiring the post-merge hook."
 
-Do not re-run `/llake-doctor` here — the plan's Phase 5 already did.
+Do not re-run `/llake-doctor` here — the plan's Phase 4 already did.
 
 In **interactive-abort** (the user declined at Phase 6): Phase 8 does not run. The Phase 6 abort message was the final output.
 
