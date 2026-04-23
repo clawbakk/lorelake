@@ -32,7 +32,7 @@
     "maxBudgetUsd": 10.00,
     "timeoutSeconds": 1200,
     "branch": "main",
-    "include": ["src/", "package.json", "tsconfig.*"],
+    "include": ["src/"],
     "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
   },
 

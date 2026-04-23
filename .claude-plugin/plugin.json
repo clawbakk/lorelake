@@ -1,5 +1,23 @@
 {
   "name": "lorelake",
   "version": "0.1.0",
-  "description": "Compounding project wiki for Claude Code — auto-updated by hooks on merges and session ends."
+  "description": "Compounding per-project wiki maintained by Claude Code on every session end and every merge.",
+  "author": {
+    "name": "Andrii Anistratov",
+    "email": "a-andrew@users.noreply.github.com",
+    "url": "https://github.com/a-andrew"
+  },
+  "repository": "https://github.com/clawbakk/lorelake",
+  "homepage": "https://github.com/clawbakk/lorelake#readme",
+  "bugs": "https://github.com/clawbakk/lorelake/issues",
+  "keywords": [
+    "claude-code",
+    "wiki",
+    "knowledge-base",
+    "project-context",
+    "auto-documentation",
+    "markdown",
+    "karpathy"
+  ],
+  "license": "MIT"
 }

@@ -1,14 +1,37 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+All notable changes to LoreLake are documented here.
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
-- Initial implementation of plugin scaffolding (hooks, lib, templates, prompts, schema, skill specs).
-- Smoke test verified: SessionStart injection, render-prompt rendering, all unit and bash tests passing.
+## [0.1.0] — 2026-04-22
 
-### Pending
-- Skill generation (`/llake-lady`, `/llake-doctor`, `/llake-bootstrap`) via `/skill-creator`.
-- Bootstrap config keys (`bootstrap.*`) once tested in real projects.
-- README install instructions.
+First public release.
+
+### Added
+- **Plugin scaffolding** — `.claude-plugin/plugin.json` manifest, `hooks/hooks.json` native hook registration, `/plugin install` compatibility.
+- **Four user-invoked skills** (`disable-model-invocation: true`):
+  - `/llake-lady` — install wizard.
+  - `/llake-doctor` — idempotent diagnose-and-repair.
+  - `/llake-bootstrap` — in-session initial wiki population.
+  - `/llake-lint` — wiki lint, Quick + Comprehensive modes.
+- **Hooks:**
+  - Claude Code `SessionStart` — injects the LoreLake preamble and project `index.md` into the session.
+  - Claude Code `SessionEnd` — two-pass triage → capture for decisions, gotchas, and discussions.
+  - git `post-merge` — ingest agent updates the wiki on merges into the configured branch.
+- **Schema** — split into `core.md`, `code-content-standard.md`, `conversation-content-standard.md`, `operations.md`; each writer loads only what it needs.
+- **Content standards** — Standard 1 (new-employee test), Standard 2 (immutable discussion Key Facts), Standard 3 (no credentials or PII).
+- **Plain-markdown wiki format** — pages are markdown with YAML frontmatter and `[[wikilinks]]`; any markdown editor (VS Code, Obsidian, Typora, GitHub's web UI, etc.) renders the wiki natively.
+- **Tests** — pytest suite for Python lib helpers, bash test scripts for shell libs.
+- **Docs** — README, `docs/INSTALL.md`, `CONTRIBUTING.md`, `SECURITY.md`.
+
+### Known limitations
+- **Claude Code only.** Codex, Copilot CLI, and Gemini CLI support is on the roadmap but not implemented.
+- **Per-clone git hooks.** Each collaborator runs `/llake-doctor` once after cloning a LoreLake-tracked project to wire the local `post-merge` hook. Git does not ship hooks in the tree.
+
+### Credits
+Inspired by [Andrej Karpathy's LLM-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
+
+[Unreleased]: https://github.com/clawbakk/lorelake/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/clawbakk/lorelake/releases/tag/v0.1.0
