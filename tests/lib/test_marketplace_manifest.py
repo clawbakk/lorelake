@@ -32,9 +32,15 @@ def test_marketplace_has_single_plugin_named_lorelake():
     assert plugins[0]["name"] == "lorelake"
 
 
+def test_marketplace_has_owner():
+    data = _load()
+    assert isinstance(data.get("owner"), dict), "owner must be an object"
+    assert data["owner"].get("name"), "owner.name is required"
+
+
 def test_marketplace_plugin_source_is_repo_root():
     plugins = _load()["plugins"]
-    assert plugins[0]["source"] == "."
+    assert plugins[0]["source"] == "./"
 
 
 def test_marketplace_plugin_name_matches_plugin_json():

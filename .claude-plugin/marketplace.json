@@ -1,9 +1,19 @@
 {
   "name": "clawbakk",
+  "owner": {
+    "name": "Andrii Anistratov",
+    "email": "a-andrew@users.noreply.github.com"
+  },
   "plugins": [
     {
       "name": "lorelake",
-      "source": "."
+      "description": "Living wiki curator for software projects — captures session insights, ingests code changes, and keeps a structured knowledge base current",
+      "source": "./",
+      "version": "0.1.0",
+      "author": {
+        "name": "Andrii Anistratov",
+        "email": "a-andrew@users.noreply.github.com"
+      }
     }
   ]
 }
