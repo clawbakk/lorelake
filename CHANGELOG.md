@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+- `.claude-plugin/marketplace.json` — makes the repo a single-plugin marketplace under the name `clawbakk`, so `/plugin marketplace add clawbakk/lorelake` + `/plugin install lorelake@clawbakk` resolve. Test coverage in `tests/lib/test_marketplace_manifest.py`.
+
+### Changed
+- Install docs (`README.md`, `docs/INSTALL.md`) rewritten around the marketplace-add flow. The previously documented `git+https://...` form never worked and has been removed.
+
+### Fixed
+- Every `/plugin install lorelake` / `/plugin update lorelake` reference in user-facing docs is now qualified with `@clawbakk`. Regression-tested in `tests/lib/test_release_content.py`.
+
 ## [0.1.0] — 2026-04-22
 
 First public release.
