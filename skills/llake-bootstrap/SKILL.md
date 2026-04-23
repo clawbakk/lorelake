@@ -1,6 +1,6 @@
 ---
 name: llake-bootstrap
-description: LoreLake Bootstrap — populates a freshly-installed LoreLake with a comprehensive initial wiki covering the configured codebase scope. Runs in the user's active Claude Code session as an orchestrator that reads `ingest.include` from `config.json`, decomposes the in-scope codebase into focused tasks with pre-assigned page slugs, dispatches subagents via the `Task` tool to write wiki pages in parallel, performs a consistency & cross-link pass, then finalizes `index.md` and `last-ingest-sha`. No background `claude -p` agent and no separate budget — bootstrap inherits the session's model and limits. One-time only. Invoked only when the user explicitly types `/llake-bootstrap`. Does NOT install LoreLake (`/llake-lady`) and does NOT diagnose or repair installs (`/llake-doctor`).
+description: Use when populating a fresh LoreLake install with an initial wiki from the configured codebase scope. Invoked via /llake-bootstrap.
 disable-model-invocation: true
 ---
 

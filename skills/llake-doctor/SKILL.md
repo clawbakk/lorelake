@@ -1,6 +1,6 @@
 ---
 name: llake-doctor
-description: LoreLake Doctor — diagnose-and-repair tool for an existing LoreLake install. Idempotent and safe to run anytime. Verifies the `llake/` structure, `.gitignore` exclusion, the git post-merge hook shim, Claude Code SessionStart/SessionEnd hook registrations, `config.json` schema version, and config key coverage — then repairs any drift in place and prints a structured report. Invoked only when the user explicitly types `/llake-doctor`, and also runs automatically as the final phase of the `/llake-lady` install plan. Does NOT populate wiki content (`/llake-bootstrap`) and does NOT perform initial install (`/llake-lady`).
+description: Use when verifying or repairing an existing LoreLake install — after a fresh clone, plugin upgrade, or suspected drift. Invoked via /llake-doctor.
 disable-model-invocation: true
 ---
 
