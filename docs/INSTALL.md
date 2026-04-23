@@ -12,39 +12,42 @@
 
 ## Install
 
-### Path A — Claude Code marketplace (recommended)
+### Path A — Claude Code marketplace (once listed)
 
-Inside any Claude Code session:
+Once LoreLake is accepted into the official Claude Code marketplace, one command installs it inside any Claude Code session:
 
 ```
-/plugin install lorelake
+/plugin install lorelake@clawbakk
 ```
 
 Restart Claude Code if prompted, then continue to "First-project setup."
 
-### Path B — Install from GitHub
+### Path B — Install from GitHub (recommended today)
 
-Inside Claude Code:
-
-```
-/plugin install git+https://github.com/clawbakk/lorelake
-```
-
-Pin to a specific release:
+Register the repo as a marketplace, then install:
 
 ```
-/plugin install git+https://github.com/clawbakk/lorelake@v0.1.0
+/plugin marketplace add clawbakk/lorelake
+/plugin install lorelake@clawbakk
+```
+
+Pin to a specific release by adding a ref to the marketplace source:
+
+```
+/plugin marketplace add clawbakk/lorelake@v0.1.0
+/plugin install lorelake@clawbakk
 ```
 
 ### Path C — Local development install (contributors)
 
-For working on LoreLake itself, symlink the repo into your plugins directory:
+For working on LoreLake itself, register the local checkout as a marketplace:
 
-```bash
-ln -s "$(pwd)" ~/.claude/plugins/lorelake
+```
+/plugin marketplace add /absolute/path/to/lorelake
+/plugin install lorelake@clawbakk
 ```
 
-Restart Claude Code. Changes to hook scripts take effect on the next hook fire; changes to `hooks/hooks.json` or `.claude-plugin/plugin.json` require a plugin reload.
+Local-path marketplaces are not cached — edits to hook scripts take effect on the next hook fire. Changes to `hooks/hooks.json` or `.claude-plugin/plugin.json` require `/reload-plugins`.
 
 ## First-project setup
 
@@ -79,9 +82,8 @@ It checks structure, config, hook wiring, and the plugin manifest, then repairs 
 
 ## Updating
 
-- **Marketplace install:** `/plugin update lorelake`.
-- **GitHub install:** `/plugin update lorelake` pulls the latest commit on the default branch; use the pinned form (`@v0.1.0`) for reproducibility.
-- **Local / symlink install:** `git pull` in the plugin repo.
+- **Marketplace install (any of Paths A or B):** `/plugin update lorelake@clawbakk`. For a pinned install, re-add the marketplace at the new ref: `/plugin marketplace add clawbakk/lorelake@v0.2.0`.
+- **Local dev install (Path C):** `git pull` in the plugin repo, then `/reload-plugins` in Claude Code.
 
 After any update, run `/llake-doctor` in each tracked project to reconcile new config keys or hook wiring.
 
@@ -90,7 +92,7 @@ After any update, run `/llake-doctor` in each tracked project to reconcile new c
 Globally:
 
 ```
-/plugin uninstall lorelake
+/plugin uninstall lorelake@clawbakk
 ```
 
 Per project: nothing automatic removes `<project>/llake/`. It is your data — delete it yourself if you want to stop tracking the project. The `.git/hooks/post-merge` shim fails silently if the plugin directory is no longer present — git ignores the exit code of post-merge hooks, so `git pull` continues unaffected.

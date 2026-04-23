@@ -41,19 +41,20 @@ Unlike retrieval-augmented chat, LoreLake builds a **compounding artifact**: eac
 
 ## Install
 
-**Claude Code marketplace (recommended, once listed):**
+**From GitHub (recommended today):**
 
 ```
-/plugin install lorelake
+/plugin marketplace add clawbakk/lorelake
+/plugin install lorelake@clawbakk
 ```
 
-**From GitHub:**
+**Claude Code marketplace (once listed):**
 
 ```
-/plugin install git+https://github.com/clawbakk/lorelake
+/plugin install lorelake@clawbakk
 ```
 
-Full instructions — including local-development install and troubleshooting — in [**docs/INSTALL.md**](./docs/INSTALL.md).
+Full instructions — including pinning, local-development install, and troubleshooting — in [**docs/INSTALL.md**](./docs/INSTALL.md).
 
 ## Quick start
 

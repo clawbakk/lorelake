@@ -1,5 +1,6 @@
 """Regression tests for the release-readiness content rewrites."""
 import json
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -61,4 +62,37 @@ def test_config_default_ingest_include_is_minimal():
     include = data["ingest"]["include"]
     assert include == ["src/"], (
         f"ingest.include default must be ['src/']; got {include!r}"
+    )
+
+
+def test_no_git_plus_https_install_syntax_in_user_docs():
+    """`/plugin install git+https://...` never worked — it is treated as a
+    marketplace name lookup and returns 'Marketplace not found'. Any recurrence
+    in user-facing docs is a regression.
+    """
+    offenders = []
+    for rel in ("README.md", "docs/INSTALL.md"):
+        path = REPO_ROOT / rel
+        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+            if "git+https" in line:
+                offenders.append(f"{rel}:{lineno}: {line.strip()}")
+    assert not offenders, (
+        "Found deprecated git+https install syntax:\n" + "\n".join(offenders)
+    )
+
+
+def test_plugin_install_lorelake_uses_clawbakk_marketplace():
+    """Every `/plugin install|update|uninstall lorelake` must be qualified with
+    `@clawbakk` once the marketplace manifest ships — the bare form doesn't resolve.
+    """
+    pattern = re.compile(r"/plugin (?:install|update|uninstall) lorelake(?!@clawbakk)")
+    offenders = []
+    for rel in ("README.md", "docs/INSTALL.md"):
+        path = REPO_ROOT / rel
+        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+            if pattern.search(line):
+                offenders.append(f"{rel}:{lineno}: {line.strip()}")
+    assert not offenders, (
+        "Found `/plugin install|update lorelake` without `@clawbakk` suffix:\n"
+        + "\n".join(offenders)
     )
