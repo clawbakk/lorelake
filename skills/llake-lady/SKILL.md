@@ -29,24 +29,30 @@ Echo both paths back to the user in a single line before Phase 1 so a wrong CWD 
 
 Verify in order. On any failure, emit a clear message naming the missing prerequisite and the fix, then stop. **Do not auto-install anything** — the user owns their toolchain.
 
-1. **Project root looks real.** At least one of these must exist in `$PROJECT_ROOT`:
+1. **Python 3 available.** Run `command -v python3 >/dev/null 2>&1` and `python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)'`. If either fails, stop:
+
+   > "LoreLake requires `python3` 3.8 or newer in PATH. Install Python 3.8+ (https://www.python.org/downloads/ or your distro package manager), then re-run `/llake-lady`."
+
+   Do not attempt to install Python automatically.
+
+2. **Project root looks real.** At least one of these must exist in `$PROJECT_ROOT`:
    - `.git/`
    - `CLAUDE.md`
    - A common manifest: `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `pom.xml`, `build.gradle`
 
    If none: "The current directory does not look like a project root. `cd` into the project and re-run `/llake-lady`."
 
-2. **Git-initialized.** Run `git -C "$PROJECT_ROOT" rev-parse --show-toplevel`. If it fails, do **not** stop — emit a warning and continue:
+3. **Git-initialized.** Run `git -C "$PROJECT_ROOT" rev-parse --show-toplevel`. If it fails, do **not** stop — emit a warning and continue:
    > "`$PROJECT_ROOT` is not a git repo. The post-merge ingest hook will be deferred. Run `git init` then `/llake-doctor` to finish wiring."
 
-3. **Plugin templates readable.** Confirm these files exist and are readable:
+4. **Plugin templates readable.** Confirm these files exist and are readable:
    - `$PLUGIN_ROOT/templates/config.default.json`
    - `$PLUGIN_ROOT/templates/plan.md.tmpl`
    - `$PLUGIN_ROOT/templates/index.md.tmpl`
 
    If any is missing: "Plugin install appears incomplete (missing `<file>`). Reinstall the plugin."
 
-4. **No existing install.** If `$PROJECT_ROOT/llake/` exists (even as an empty directory): stop. "LoreLake is already installed in this project at `<absolute path>/llake/`. Run `/llake-doctor` to diagnose or repair, or remove that directory first."
+5. **No existing install.** If `$PROJECT_ROOT/llake/` exists (even as an empty directory): stop. "LoreLake is already installed in this project at `<absolute path>/llake/`. Run `/llake-doctor` to diagnose or repair, or remove that directory first."
 
 ---
 

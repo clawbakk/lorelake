@@ -43,6 +43,16 @@ Run every check below in order and **accumulate issues in an internal list**. Do
 
 Each check records zero or more issues. An issue is a `(category, detail, fix)` tuple — the category drives the report's `[CHECK]` label, the detail is what to show after the colon, and the fix is the action Phase 2 will perform.
 
+### Check 0 — Python 3 runtime
+
+Run `command -v python3 >/dev/null 2>&1` and `python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)'`. If either fails, record a single **critical** issue: "python3 3.8+ not available".
+
+The hooks shell out to `python3` constantly — if it is missing or too old, every hook fails silently and nothing in the wiki gets updated. Doctor cannot repair this; the user must install Python themselves.
+
+If Check 0 fails, skip Checks 1–8 entirely. Emit the report with one `[CHECK]` line for Check 0 and `SKIPPED (python3 unavailable)` for every later check. No `[FIX]` lines. The summary reads: `Summary: python3 is not available (or too old). Install Python 3.8+, then re-run /llake-doctor.`
+
+---
+
 ### Check 1 — LoreLake structure
 
 Verify that every file and directory the install plan creates is present:
@@ -124,6 +134,10 @@ Record an issue only if the file both exists AND its first non-blank line matche
 ## Phase 2 — Repair
 
 Apply fixes in the order below. Every fix is idempotent: if the target state already matches, skip silently; otherwise apply the minimal change. This phase emits no user-visible output either — Phase 3 prints the combined `[CHECK]` and `[FIX]` lines together.
+
+### Fix — Python 3 runtime (diagnostic-only)
+
+This is not a fix doctor applies. If Check 0 failed, Phase 2 skips every other fix as well — the remediation is user-driven ("install python3 3.8+"). The `[CHECK]` line in Phase 3 carries the full remediation message.
 
 ### Fix — Missing LoreLake structure
 
