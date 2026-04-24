@@ -43,6 +43,14 @@ mkdir -p "$STATE_DIR"
 HOOK_NAME="session-start"
 hook_start "$HOOK_NAME" "$LOG_FILE" "$CONFIG_FILE" "$LIB_DIR"
 
+# Recursion guard — skip when fired by a LoreLake agent's claude -p sub-session.
+# Keeps the preamble (which forbids editing llake/ directly) out of ingest/
+# capture agent contexts where it would conflict with their prompts.
+if [ "${IS_LLAKE_AGENT:-}" = "true" ]; then
+  hook_end "skipped: recursion guard [${LLAKE_AGENT_ID:-unknown}]" "$LOG_FILE"
+  exit 0
+fi
+
 PREAMBLE=""
 [ -f "$PREAMBLE_FILE" ] && PREAMBLE=$(cat "$PREAMBLE_FILE")
 

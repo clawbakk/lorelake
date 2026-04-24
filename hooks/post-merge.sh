@@ -195,6 +195,8 @@ Budget:  \$${MAX_BUDGET_USD}
 EOF
 
 # Build the ingest prompt via the shared template renderer.
+# Capture stderr separately so we can surface render failures clearly.
+RENDER_STDERR_FILE=$(mktemp -t llake-render-stderr.XXXXXX)
 INGEST_PROMPT=$(python3 "$LIB_DIR/render-prompt.py" \
   --templates-dir "$TEMPLATES_DIR" \
   "$INGEST_PROMPT_TMPL" \
@@ -207,7 +209,27 @@ INGEST_PROMPT=$(python3 "$LIB_DIR/render-prompt.py" \
   "PATHSPEC_INCLUDE=$PATHSPEC_INCLUDE" \
   "LLAKE_ROOT=$LLAKE_ROOT" \
   "WIKI_ROOT=$WIKI_ROOT" \
-  "SCHEMA_DIR=$SCHEMA_DIR")
+  "SCHEMA_DIR=$SCHEMA_DIR" 2>"$RENDER_STDERR_FILE")
+RENDER_EXIT=$?
+
+if [ "$RENDER_EXIT" -ne 0 ] || [ -z "$INGEST_PROMPT" ]; then
+  RENDER_ERR=$(cat "$RENDER_STDERR_FILE" 2>/dev/null)
+  rm -f "$RENDER_STDERR_FILE"
+  {
+    echo ""
+    echo "=== RENDER FAILED: exit $RENDER_EXIT at $(date '+%Y-%m-%d %H:%M:%S') ==="
+    if [ -n "$RENDER_ERR" ]; then
+      echo "$RENDER_ERR"
+    else
+      echo "(renderer produced empty prompt with exit $RENDER_EXIT)"
+    fi
+  } >> "$AGENT_LOG"
+  ERR_SUMMARY=$(echo "$RENDER_ERR" | head -1 | tr -d '\n' | cut -c1-200)
+  [ -z "$ERR_SUMMARY" ] && ERR_SUMMARY="empty prompt"
+  hook_end "skipped: render-prompt failed (agent $AGENT_ID, exit $RENDER_EXIT): $ERR_SUMMARY" "$LOG_FILE"
+  exit 0
+fi
+rm -f "$RENDER_STDERR_FILE"
 
 (
   source "$LIB_DIR/agent-run.sh"
@@ -227,12 +249,17 @@ INGEST_PROMPT=$(python3 "$LIB_DIR/render-prompt.py" \
   ) &
   WATCHDOG_PID=$!
 
-  # Start the agent
-  claude $MODEL_FLAG $EFFORT_FLAG -p "$INGEST_PROMPT" \
-  --allowedTools "$ALLOWED_TOOLS" \
-  --max-budget-usd "$MAX_BUDGET_USD" \
-  --output-format stream-json --verbose 2>&1 \
-  | python3 "$LIB_DIR/format-agent-log.py" >> "$AGENT_LOG" &
+  # Start the agent. Wrap in a subshell so that PIPESTATUS[0] (claude's
+  # exit code) is the subshell's exit code — `wait "$CLAUDE_PID"` would
+  # otherwise return the formatter's exit code (always 0).
+  (
+    claude $MODEL_FLAG $EFFORT_FLAG -p "$INGEST_PROMPT" \
+    --allowedTools "$ALLOWED_TOOLS" \
+    --max-budget-usd "$MAX_BUDGET_USD" \
+    --output-format stream-json --verbose 2>&1 \
+    | python3 "$LIB_DIR/format-agent-log.py" >> "$AGENT_LOG"
+    exit ${PIPESTATUS[0]}
+  ) &
   CLAUDE_PID=$!
 
   # Wait for agent to finish (or be killed)
@@ -245,22 +272,38 @@ INGEST_PROMPT=$(python3 "$LIB_DIR/render-prompt.py" \
   kill "$WATCHDOG_PID" 2>/dev/null
   wait "$WATCHDOG_PID" 2>/dev/null
 
-  # Log completion
+  # Log completion. SHA advances ONLY on a clean run: render succeeded,
+  # agent spawned, agent exited 0. External kills and nonzero exits do NOT
+  # advance the cursor — the next post-merge will retry the range.
   echo "" >> "$AGENT_LOG"
   if [ "$EXIT_CODE" -eq 0 ]; then
+    echo "$CURRENT_SHA" > "$SHA_FILE"
     echo "=== COMPLETED: exit 0 at $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$AGENT_LOG"
-    printf "%s | %-13s | completed: agent %s finished (exit 0, commits: %s)\n" \
-      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" "$COMMIT_RANGE" >> "$LOG_FILE"
+    printf "%s | %-13s | completed: agent %s finished (exit 0, commits: %s, sha: advanced to %s)\n" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" "$COMMIT_RANGE" "${CURRENT_SHA:0:7}" >> "$LOG_FILE"
   elif [ "$EXIT_CODE" -eq 137 ] || [ "$EXIT_CODE" -eq 143 ]; then
-    echo "=== KILLED: exit $EXIT_CODE at $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$AGENT_LOG"
-    # Timeout already logged by watchdog
+    # If the trap in agent-run.sh fired, it already logged to hooks.log and
+    # exited the outer subshell — we never reach this branch in that case.
+    # So a 137/143 here means the claude process was killed externally
+    # (OOM, external SIGKILL, etc.) without our trap firing.
+    echo "=== KILLED: exit $EXIT_CODE at $(date '+%Y-%m-%d %H:%M:%S') (external) ===" >> "$AGENT_LOG"
+    printf "%s | %-13s | killed: agent %s (exit %s, external, commits: %s)\n" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" "$EXIT_CODE" "$COMMIT_RANGE" >> "$LOG_FILE"
   else
     echo "=== FAILED: exit $EXIT_CODE at $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$AGENT_LOG"
     printf "%s | %-13s | failed: agent %s (exit %s, commits: %s)\n" \
       "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" "$EXIT_CODE" "$COMMIT_RANGE" >> "$LOG_FILE"
   fi
 ) &
-disown
+BG_PID=$!
+
+if [ "${LLAKE_POST_MERGE_SYNC:-}" = "1" ]; then
+  # Test/debug mode: wait for the background subshell to finish so callers
+  # can assert on the final state of hooks.log, agent.log, and SHA_FILE.
+  wait "$BG_PID" 2>/dev/null
+else
+  disown
+fi
 
 hook_end "done: spawned agent $AGENT_ID (commits: $COMMIT_RANGE, timeout: ${MAX_TIMEOUT_SEC}s)" "$LOG_FILE"
 exit 0

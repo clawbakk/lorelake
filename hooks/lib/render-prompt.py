@@ -71,6 +71,8 @@ def main():
     custom_slots = (config.get("prompts", {}) or {}).get(section_name, {}) or {}
     runtime_vars = parse_runtime_vars(args.vars)
 
+    unresolved = set()
+
     def resolve(match):
         name = match.group(1)
         fallback_path = match.group(2)
@@ -90,14 +92,14 @@ def main():
             except (IOError, OSError):
                 pass
 
+        unresolved.add(name)
         return match.group(0)
 
     rendered = PLACEHOLDER_RE.sub(resolve, template)
 
-    leftovers = PLACEHOLDER_RE.findall(rendered)
-    if leftovers:
-        unresolved = sorted({m[0] for m in leftovers})
-        print(f"render-prompt: unresolved placeholders: {', '.join(unresolved)}", file=sys.stderr)
+    if unresolved:
+        names = ", ".join(sorted(unresolved))
+        print(f"render-prompt: unresolved placeholders: {names}", file=sys.stderr)
         sys.exit(1)
 
     sys.stdout.write(rendered)
