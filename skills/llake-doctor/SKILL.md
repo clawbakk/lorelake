@@ -161,14 +161,38 @@ If `<project>/.gitignore` is missing, create it containing the single line `llak
 
 Skip entirely if `<project>/.git/` does not exist.
 
-Write `<project>/.git/hooks/post-merge` with exactly:
+Inspect `<project>/.git/hooks/post-merge`:
 
-```bash
-#!/bin/bash
-exec "<$PLUGIN_ROOT absolute path>/hooks/post-merge.sh" "$@"
-```
+1. **If the file does not exist** → write the plain LoreLake shim and `chmod +x`:
+   ```bash
+   #!/bin/bash
+   exec "<$PLUGIN_ROOT absolute path>/hooks/post-merge.sh" "$@"
+   ```
+2. **If the file exists and contains the literal substring `hooks/post-merge.sh`** → it is already a LoreLake shim (plain or chain). Re-write it to match the expected form for its variant, preserving the chaining clause if a `post-merge.pre-llake` file exists alongside. In practice this is a no-op on a healthy install; it self-heals if the plugin path has changed.
+3. **If the file exists and does NOT contain `hooks/post-merge.sh`** → collision. Ask the user the same question lady asks in Phase 2.5 via `AskUserQuestion`:
 
-Substitute the resolved absolute `$PLUGIN_ROOT` literally. Then `chmod +x` the file. Writing the full contents (rather than patching) resolves "missing", "drifted", and "not executable" in one operation.
+   > "A non-LoreLake `post-merge` hook is present at `<project>/.git/hooks/post-merge`. How should doctor proceed?"
+   > - **[A] Chain — preserve the existing hook.** Move it to `post-merge.pre-llake`, write the chaining shim.
+   > - **[B] Skip — leave it alone.** Doctor records this as a `NOT WIRED` warning in the report and moves on.
+
+   On [A]: perform the same backup + chain-shim write that lady's plan does (see `templates/plan.md.tmpl` Phase 3, `chain` strategy). The chaining shim content is:
+
+   ```bash
+   #!/bin/bash
+   rc=0
+   "<$PLUGIN_ROOT absolute path>/hooks/post-merge.sh" "$@" || rc=$?
+   chained="$(dirname "$0")/post-merge.pre-llake"
+   if [ -x "$chained" ]; then
+     "$chained" "$@"
+     chained_rc=$?
+     [ "$chained_rc" -ne 0 ] && exit "$chained_rc"
+   fi
+   exit "$rc"
+   ```
+
+   On [B]: do not touch the file. The report prints `[CHECK] Post-merge hook : EXISTING USER HOOK (LoreLake not wired)` and the Phase 3 summary notes that ingest will not run until the user wires it manually.
+
+The backup file `post-merge.pre-llake` is created at most once — on first collision — and is **never deleted** by doctor. If the backup is missing on a subsequent run (user removed it), doctor notes it as informational (`post-merge.pre-llake absent`) and moves on without recreating it.
 
 ### Fix — Plugin manifest integrity
 
@@ -235,6 +259,11 @@ Summary: 3 issues, 3 fixed. LoreLake is healthy.
 Rules for the report:
 
 - One `[CHECK]` line per check, in the order of Phase 1 (1 through 7, but collapse Check 1 into a single structure line unless there are many missing paths — in which case list them on sub-lines).
+- `[CHECK] Post-merge hook` possible values:
+  - `OK` — our shim (plain or chain) is in place and executable.
+  - `NOT WIRED (git repo present)` — no hook file, fixed by this run.
+  - `EXISTING USER HOOK (LoreLake not wired)` — user picked [B] during collision; informational, not an error.
+  - `DRIFTED — rewrote` — stale LoreLake shim, self-healed.
 - One `[FIX]` line per repair that actually ran. Skip fixes that were no-ops. If a fix failed, show `: FAILED — <reason>` and mention it in the summary.
 - Summary line always appears last. Templates:
   - All healthy: `Summary: 0 issues. LoreLake is healthy.`

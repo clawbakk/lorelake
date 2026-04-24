@@ -65,6 +65,31 @@ Keep the findings in session memory. Don't dump raw file contents back to the us
 
 ---
 
+## Phase 2.5 — Post-merge collision check
+
+Only run this phase if `$PROJECT_ROOT/.git/` exists. Skip entirely otherwise — there is no hook to collide with yet, and doctor will wire the hook when the user runs `git init`.
+
+Inspect `$PROJECT_ROOT/.git/hooks/post-merge`:
+
+- If the file does not exist → no collision. Set `post_merge_strategy = "install"` in session memory. Skip to Phase 3.
+- If the file exists and contains the literal substring `hooks/post-merge.sh` → it is already a LoreLake shim (from a prior install). Set `post_merge_strategy = "install"` (the executor will rewrite it harmlessly — idempotent). Skip to Phase 3.
+- If the file exists and does NOT contain `hooks/post-merge.sh` → collision. Continue below.
+
+**Collision: ask the user** via `AskUserQuestion`, regardless of auto/interactive mode. Phrase:
+
+> "A `post-merge` git hook already exists at `$PROJECT_ROOT/.git/hooks/post-merge`. How would you like LoreLake to install?"
+
+Options:
+
+- **[A] Chain — preserve the existing hook.** The installer backs the current hook up to `post-merge.pre-llake` and writes a LoreLake shim that runs the plugin first and then the backup. Your hook continues to run on every merge.
+- **[B] Skip — I'll wire it manually.** The installer does not touch `.git/hooks/post-merge`. Ingest will not run automatically until you wire it yourself; the plan's final output includes manual instructions.
+
+Store the answer as `post_merge_strategy = "chain"` or `post_merge_strategy = "skip"`.
+
+Phase 5's plan rendering consumes this value as the `{{POST_MERGE_STRATEGY}}` placeholder. Possible values: `install`, `chain`, `skip`.
+
+---
+
 ## Phase 3 — Mode selection
 
 Ask the user exactly one question, via the `AskUserQuestion` tool. The recommended option (**Auto**) goes first.
@@ -147,6 +172,7 @@ Read `$PLUGIN_ROOT/templates/plan.md.tmpl`. Substitute these placeholders:
 | `{{PROJECT_ROOT}}` | Absolute path to the project. |
 | `{{EMBEDDED_CONFIG}}` | The JSON you wrote in Phase 4, pretty-printed, with `_comment` fields preserved. This makes the plan self-contained — the user can regenerate `config.json` from the plan alone if needed. |
 | `{{PLAN_PATH}}` | The absolute path `$PROJECT_ROOT/llake/.state/install-plan.md` — the executor reads this to know which file to delete in its final step. |
+| `{{POST_MERGE_STRATEGY}}` | The value `install`, `chain`, or `skip` chosen in Phase 2.5 (or `install` if the project is not a git repo or has no pre-existing hook). |
 
 Write the filled plan to `$PROJECT_ROOT/llake/.state/install-plan.md`. Create `$PROJECT_ROOT/llake/.state/` first if it does not exist — the executor will create the rest of the `.state/` subtree in its Phase 1, but the plan itself must land before then. The `.state/` directory is covered by the installer's `.gitignore` entry, so the plan never enters git history.
 
