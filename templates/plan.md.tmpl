@@ -3,6 +3,7 @@
 > Generated: {{DATE}}
 > Plugin install: {{PLUGIN_PATH}}
 > Project root: {{PROJECT_ROOT}}
+> Plan path: {{PLAN_PATH}}
 
 This plan installs LoreLake into `{{PROJECT_ROOT}}/llake/`. Execute it once. It is idempotent — re-running is safe and skips already-completed steps. On interrupt, resume by re-running and logging into `{{PROJECT_ROOT}}/llake/log.md`.
 
@@ -72,6 +73,14 @@ Each phase appends a completion entry to `log.md`. Resumption: read the log tail
 
 - [ ] When ready to populate the wiki, invoke `/llake-bootstrap`
 - [ ] (This phase does NOT log here — bootstrap logs its own entry)
+
+## Phase 6 — Clean up the install plan
+
+- [ ] Delete this plan file: `rm -f {{PLAN_PATH}}`
+- [ ] **Append to `{{PROJECT_ROOT}}/llake/log.md`:**
+  ```
+  ## [{{DATE}}] install-plan | Phase 6 complete: plan file removed
+  ```
 
 ---
 

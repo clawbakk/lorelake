@@ -113,6 +113,12 @@ Record a single issue listing every missing dot-path. This becomes the forward-m
 
 Do NOT record issues for keys the user's config has but the plugin's defaults no longer ship — those are user-managed leftovers from an older plugin version. The spec is explicit about this: retired keys are left in place, the user removes them manually if they want.
 
+### Check 8 — Orphaned install plan
+
+If `<project>/llake/.state/install-plan.md` exists, it is a leftover from a crashed or interrupted executor run. The plan is install-time only; nothing reads it after Phase 4 of the install.
+
+Record an issue only if the file both exists AND its first non-blank line matches the pattern `# LoreLake Install Plan — *`. The header guard avoids deleting an unrelated file a user may have written at the same path.
+
 ---
 
 ## Phase 2 — Repair
@@ -192,6 +198,10 @@ Only runs when Check 6 or Check 7 recorded issues. The merge is additive:
 
 If Check 6 recorded "newer than plugin" instead of "needs upgrade", skip this fix entirely and let the warning surface in the report — doctor does not downgrade configs.
 
+### Fix — Delete orphaned install plan
+
+For the issue recorded by Check 8, run the equivalent of `rm -f <project>/llake/.state/install-plan.md`. No report entry needed beyond the Phase 3 `[FIX] Removed orphaned install plan : DONE` line.
+
 ---
 
 ## Phase 3 — Report
@@ -213,6 +223,7 @@ Plugin:  /absolute/path/to/plugin
 [CHECK] Stale manual entries       : NONE
 [CHECK] Config schema version      : OK (1)
 [CHECK] Config key coverage        : 2 keys missing → merging from defaults
+[CHECK] Orphaned install plan      : OK
 
 [FIX] Appending llake/.state/ to .gitignore           : DONE
 [FIX] Wiring .git/hooks/post-merge                    : DONE

@@ -146,10 +146,11 @@ Read `$PLUGIN_ROOT/templates/plan.md.tmpl`. Substitute these placeholders:
 | `{{PLUGIN_PATH}}` | `$PLUGIN_ROOT` — absolute, fully resolved, **not** a symlink. The plan embeds this so the executor (or any future session) can find the plugin from a different working directory. |
 | `{{PROJECT_ROOT}}` | Absolute path to the project. |
 | `{{EMBEDDED_CONFIG}}` | The JSON you wrote in Phase 4, pretty-printed, with `_comment` fields preserved. This makes the plan self-contained — the user can regenerate `config.json` from the plan alone if needed. |
+| `{{PLAN_PATH}}` | The absolute path `$PROJECT_ROOT/llake/.state/install-plan.md` — the executor reads this to know which file to delete in its final step. |
 
-Write the filled plan to `$PROJECT_ROOT/llake/install-plan.md`.
+Write the filled plan to `$PROJECT_ROOT/llake/.state/install-plan.md`. Create `$PROJECT_ROOT/llake/.state/` first if it does not exist — the executor will create the rest of the `.state/` subtree in its Phase 1, but the plan itself must land before then. The `.state/` directory is covered by the installer's `.gitignore` entry, so the plan never enters git history.
 
-This is the last file the wizard writes. Phase 7's executor handles everything else.
+This is the last file the wizard writes. Phase 7's executor handles everything else — including deleting this plan file as its final step.
 
 ---
 
@@ -200,6 +201,7 @@ Rules:
 5. Write surface: <project>/llake/**, <project>/.gitignore, and <project>/.git/hooks/post-merge. Do NOT write anywhere else. Claude Code hook registration is handled by the plugin manifest, not the installer.
 6. Phase 4 invokes /llake-doctor. Invoke that skill via the Skill tool available in this session. If doctor reports issues, surface its full report verbatim in your summary.
 7. Phase 5 is informational — do NOT run /llake-bootstrap. Bootstrap is the user's next step, not yours.
+8. Your last action after Phase 4 completes is to delete the plan file at the path passed as "Plan path". Do not keep it, do not move it — delete only. If the delete fails (e.g. permissions), surface the error in your summary but do not treat it as a plan failure.
 
 When done, print a concise summary: the paths you wrote, any warnings (non-git repo, skipped steps, etc.), and the doctor report from Phase 4.
 ```
@@ -214,7 +216,7 @@ Wait for the subagent's summary. Relay its key points in Phase 8.
 
 Print a concise summary that always names:
 
-- **Install plan:** `<absolute path to install-plan.md>`
+- **Install plan:** executed and deleted (was at `<project>/llake/.state/install-plan.md`; removed after Phase 4 to keep the wiki store clean)
 - **Config:** `<project>/llake/config.json`
 - **Log:** `<project>/llake/log.md` (records each phase the executor completed; the tail is a resume cursor)
 - **Doctor:** the report the executor surfaced from Phase 4 of the plan (or a note that doctor reported zero issues)
