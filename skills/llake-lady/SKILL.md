@@ -220,7 +220,7 @@ Print a concise summary that always names:
 - **Config:** `<project>/llake/config.json`
 - **Log:** `<project>/llake/log.md` (records each phase the executor completed; the tail is a resume cursor)
 - **Doctor:** the report the executor surfaced from Phase 4 of the plan (or a note that doctor reported zero issues)
-- **Next recommended step:** `/llake-bootstrap` when the user is ready to populate the initial wiki.
+- **Next recommended step:** Run `/llake-bootstrap` when you're ready to populate the initial wiki. We recommend starting a fresh Claude Code session first — bootstrap is resource-heavy.
 
 If the project was not a git repo, also remind the user: "Run `git init`, then `/llake-doctor`, to finish wiring the post-merge hook."
 
