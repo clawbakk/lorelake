@@ -123,7 +123,9 @@ Prefer more focused tasks over fewer large ones. A task whose subagent is trying
 
 ## Phase 4 — Dispatch subagents
 
-Run independent subagents in parallel where possible — a single message with multiple `Task` calls. Dispatch each subagent with a self-contained prompt (the subagent cannot see this conversation).
+**Concurrency cap: at most 5 subagents running at once.** Send batches of up to 5 `Task` calls per message, wait for the batch to complete, then dispatch the next batch. For 11 tasks, the pattern is batch 1 (5), batch 2 (5), batch 3 (1). The cap is a hard limit — do not exceed 5 concurrent subagents under any circumstance. Rationale: provider rate limits, bounded session token usage, predictable wall-clock.
+
+Within a batch, run subagents in parallel — a single message with multiple `Task` calls. Dispatch each subagent with a self-contained prompt (the subagent cannot see this conversation).
 
 ### Subagent prompt template
 
