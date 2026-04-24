@@ -44,6 +44,10 @@ def format_tool_input(tool_name, tool_input):
         return truncate(json.dumps(tool_input, ensure_ascii=False), 200)
 
 
+def result_truncation_cap(tool_name):
+    return 2000
+
+
 def main():
     parser = argparse.ArgumentParser(description="Format Claude stream-json into readable agent log")
     parser.add_argument('--extract-result', dest='extract_result_path', default=None,
@@ -53,6 +57,7 @@ def main():
     turn = 0
     prev_usage = None  # (in, out, cache_read, cache_create)
     last_assistant_text = ""
+    tool_id_to_name = {}
 
     for line in sys.stdin:
         line = line.strip()
@@ -110,6 +115,7 @@ def main():
                     name = block.get("name", "?")
                     tool_input = block.get("input", {})
                     tool_id = block.get("id", "?")
+                    tool_id_to_name[tool_id] = name
                     summary = format_tool_input(name, tool_input)
                     print(f"[{ts}] CALL | {name}({summary})")
 
@@ -120,27 +126,39 @@ def main():
 
             sys.stdout.flush()
 
-        # --- Tool result ---
-        elif event_type == "tool_result":
-            tool_name = event.get("tool_name", "?")
-            tool_id = event.get("tool_use_id", "")
-            content = event.get("content", "")
-            is_error = event.get("is_error", False)
+        # --- Tool result (wrapped inside a user message) ---
+        elif event_type == "user":
+            msg = event.get("message", {})
+            content_blocks = msg.get("content", [])
+            if not isinstance(content_blocks, list):
+                continue
 
-            # Extract text from content blocks
-            if isinstance(content, list):
-                parts = []
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        parts.append(block.get("text", ""))
-                    elif isinstance(block, str):
-                        parts.append(block)
-                content = "\n".join(parts)
-            elif not isinstance(content, str):
-                content = str(content)
+            for block in content_blocks:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
 
-            prefix = "ERROR" if is_error else "RESULT"
-            print(f"[{ts}] {prefix} | {tool_name} → {truncate(content, 300)}")
+                tool_id = block.get("tool_use_id", "")
+                tool_name = tool_id_to_name.get(tool_id, "?")
+                is_error = block.get("is_error", False)
+                raw_content = block.get("content", "")
+
+                # Content may be a string or a list of {type:"text",text:"..."} blocks.
+                if isinstance(raw_content, list):
+                    parts = []
+                    for part in raw_content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            parts.append(part.get("text", ""))
+                        elif isinstance(part, str):
+                            parts.append(part)
+                    content_text = "\n".join(parts)
+                elif isinstance(raw_content, str):
+                    content_text = raw_content
+                else:
+                    content_text = str(raw_content)
+
+                prefix = "ERROR" if is_error else "RESULT"
+                cap = result_truncation_cap(tool_name)
+                print(f"[{ts}] {prefix} | {tool_name} → {truncate(content_text, cap)}")
             sys.stdout.flush()
 
         # --- Final result ---
