@@ -8,8 +8,8 @@
 # Foreground responsibilities (in order):
 #   1. Recursion guard.
 #   2. Locate the project via marker walk (pure bash).
-#   3. Log "dispatched (async)" to hooks.log.
-#   4. Persist stdin to a tempfile the worker consumes.
+#   3. Persist stdin to a tempfile the worker consumes.
+#   4. Log "dispatched (async)" to hooks.log.
 #   5. Fork the worker detached, or (if LLAKE_SESSION_END_SYNC=1) exec it.
 #
 # There are NO python3 calls in this script. Everything config-related,
