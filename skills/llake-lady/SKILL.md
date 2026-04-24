@@ -76,13 +76,42 @@ Phrase the question as "How would you like me to install LoreLake?". Wait for th
 
 ---
 
+## Phase 3.5 — Critical config prompts
+
+Even in auto mode, two config values have no sensible default: `ingest.branch` (depends on the repo) and `ingest.include` (depends on the codebase layout). Ask the user both, using `AskUserQuestion`, regardless of the mode chosen in Phase 3.
+
+### Question 1 — Branch
+
+Suggested default = the branch you resolved in Phase 2. Present one option with that branch preselected, plus an explicit "other" option the user can type into. Phrase the question: "Which branch should the post-merge ingest hook watch?"
+
+Accept the answer as a non-empty string. If the user picks the suggested default, use the discovered branch; if they type an override, use that.
+
+### Question 2 — Ingest scope
+
+Build the suggested default by scanning `$PROJECT_ROOT`:
+
+1. List directories at the top level only (one directory deep).
+2. Exclude: any entry whose name begins with `.` or `_`, plus the literal names `llake`, `node_modules`, `venv`, `.venv`, `dist`, `build`, `target`, `.next`, `.nuxt`, `.cache`, `coverage`, `tmp`.
+3. Sort the remaining names alphabetically. Append a trailing `/` to each (matching the `src/` style already shipped in `config.default.json`).
+
+Present the resulting list as the proposed `ingest.include`. If the list is empty after filtering, fall back to `["src/"]` and state that in the question: "No obvious code directories found; defaulting to `src/`. Override if your code lives elsewhere."
+
+Accept the answer as a JSON array of strings. If the user keeps the default, use the discovered list; if they edit it, parse and validate the edited version.
+
+### Storing the answers
+
+Keep both answers in session memory under the names `answered_branch` and `answered_include`. Phase 4 (auto) and Phase 4-alt (interactive) both consume them.
+
+---
+
 ## Phase 4 — Render config (Auto mode)
 
 Render `$PROJECT_ROOT/llake/config.json` as a **full** copy of `templates/config.default.json`, not a minimal subset. Pedagogy beats minimalism — the user should see every knob immediately. Apply these adjustments:
 
 - **Preserve every `_comment` field** at its section. These are the inline documentation future-you (the user) will read when editing the file by hand.
 - **Apply discovered values where they are unambiguous:**
-  - `ingest.branch` → the branch resolved in Phase 2.
+  - `ingest.branch` → the value `answered_branch` collected in Phase 3.5.
+  - `ingest.include` → the array `answered_include` collected in Phase 3.5.
   - `prompts.ingest.EXAMPLES` → fill only if `CLAUDE.md` supplies enough domain-specific signal to author two or three short, concrete worked examples in the style of `templates/generic-examples.md`. **Do not invent fabricated examples.** If uncertain, leave it as `""` and the prompt renderer will fall back to the shipped generic set.
 - **Every other key stays at its default.** The user can edit `config.json` later; over-customization at install is friction with no payoff.
 
@@ -92,7 +121,11 @@ Write the config. Move to Phase 5.
 
 ### Phase 4-alt — Render config (Interactive mode)
 
-Walk each section of `templates/config.default.json` in order (`llake`, `sessionCapture`, `ingest`, `transcript`, `logging`, `prompts`). For each leaf key (ignore `_comment` and `_schemaVersion` — those are plumbing):
+Walk each section of `templates/config.default.json` in order (`llake`, `sessionCapture`, `ingest`, `transcript`, `logging`, `prompts`).
+
+> Skip `ingest.branch` and `ingest.include` — Phase 3.5 already collected them. Use the `answered_branch` and `answered_include` values directly. All other keys in the `ingest` section (and every other section) are still walked.
+
+For each leaf key (ignore `_comment` and `_schemaVersion` — those are plumbing):
 
 1. Show the default value from the template.
 2. Show the discovered value if any (e.g., the branch you found).
