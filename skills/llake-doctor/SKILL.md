@@ -1,6 +1,6 @@
 ---
 name: llake-doctor
-description: Use when verifying or repairing an existing LoreLake install — after a fresh clone, plugin upgrade, or suspected drift. Invoked via /llake-doctor.
+description: Use when verifying or repairing an existing LoreLake install — after a fresh clone, plugin upgrade, or suspected drift. Invoked via /llake-doctor, or via the Skill tool from the /llake-lady install plan.
 disable-model-invocation: true
 ---
 
