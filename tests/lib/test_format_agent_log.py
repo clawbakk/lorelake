@@ -120,3 +120,68 @@ def test_tool_result_error_is_flagged():
     })
     out = feed([assistant_event, user_event])
     assert "ERROR | Read → File does not exist." in out
+
+
+def _assistant_with_tool_use(tool_id, tool_name, tool_input):
+    return json.dumps({
+        "type": "assistant",
+        "message": {
+            "content": [{"type": "tool_use", "id": tool_id, "name": tool_name, "input": tool_input}],
+            "usage": {"input_tokens": 1, "output_tokens": 1,
+                      "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+        },
+    })
+
+
+def test_edit_call_shows_both_old_and_new():
+    event = _assistant_with_tool_use(
+        "toolu_edit1", "Edit",
+        {"file_path": "/tmp/x.md",
+         "old_string": "alpha beta gamma",
+         "new_string": "alpha BETA gamma"})
+    out = feed([event])
+    assert "CALL | Edit(/tmp/x.md" in out
+    assert "old:" in out and "alpha beta gamma" in out
+    assert "new:" in out and "alpha BETA gamma" in out
+
+
+def test_write_call_shows_content_preview():
+    long_content = "x" * 5000
+    event = _assistant_with_tool_use(
+        "toolu_write1", "Write",
+        {"file_path": "/tmp/y.md", "content": long_content})
+    out = feed([event])
+    # Path + "(5000 chars)" summary still present
+    assert "CALL | Write(/tmp/y.md (5000 chars)" in out
+    # Plus a content preview, capped at 2000 chars, with a total-size marker
+    assert "content: 'xxxx" in out  # leading content preview
+    assert "[3000 chars truncated]" in out
+
+
+def test_bash_result_untruncated_at_1500_chars():
+    assistant = _assistant_with_tool_use(
+        "toolu_bash1", "Bash", {"command": "echo big"})
+    user = json.dumps({
+        "type": "user",
+        "message": {"content": [{
+            "type": "tool_result", "tool_use_id": "toolu_bash1",
+            "content": "y" * 1500,
+        }]},
+    })
+    out = feed([assistant, user])
+    assert "y" * 1500 in out  # full output retained, not truncated at 300
+
+
+def test_read_result_truncated_at_500():
+    assistant = _assistant_with_tool_use(
+        "toolu_read1", "Read", {"file_path": "/tmp/big.txt"})
+    user = json.dumps({
+        "type": "user",
+        "message": {"content": [{
+            "type": "tool_result", "tool_use_id": "toolu_read1",
+            "content": "r" * 1000,
+        }]},
+    })
+    out = feed([assistant, user])
+    # Read results cap at 500 with a truncation marker
+    assert "[500 chars truncated]" in out

@@ -27,11 +27,14 @@ def format_tool_input(tool_name, tool_input):
     elif tool_name == "Write":
         path = tool_input.get("file_path", "?")
         content = tool_input.get("content", "")
-        return f"{path} ({len(content)} chars)"
+        preview = truncate(content, 2000)
+        total_marker = f" [{len(content)} chars total]" if len(content) > 2000 else ""
+        return f"{path} ({len(content)} chars), content: {preview!r}{total_marker}"
     elif tool_name == "Edit":
         path = tool_input.get("file_path", "?")
-        old = truncate(tool_input.get("old_string", ""), 80)
-        return f"{path} | old: {old!r}"
+        old = truncate(tool_input.get("old_string", ""), 500)
+        new = truncate(tool_input.get("new_string", ""), 500)
+        return f"{path} | old: {old!r} | new: {new!r}"
     elif tool_name == "Glob":
         return tool_input.get("pattern", "?")
     elif tool_name == "Grep":
@@ -39,13 +42,24 @@ def format_tool_input(tool_name, tool_input):
         path = tool_input.get("path", ".")
         return f"{pattern!r} in {path}"
     elif tool_name == "Bash":
-        return truncate(tool_input.get("command", "?"), 200)
+        return truncate(tool_input.get("command", "?"), 500)
     else:
         return truncate(json.dumps(tool_input, ensure_ascii=False), 200)
 
 
+_RESULT_CAPS = {
+    "Read": 500,
+    "Bash": 2000,
+    "Write": 500,
+    "Edit": 500,
+    "Glob": 1000,
+    "Grep": 2000,
+}
+
+
 def result_truncation_cap(tool_name):
-    return 2000
+    """Per-tool cap for tool-result content in the log. Default 1000."""
+    return _RESULT_CAPS.get(tool_name, 1000)
 
 
 def main():
