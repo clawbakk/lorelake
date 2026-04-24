@@ -24,6 +24,8 @@ source "$LIB_DIR/constants.sh"
 source "$LIB_DIR/detect-project-root.sh"
 # shellcheck source=/dev/null
 source "$LIB_DIR/agent-id.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/hook-log.sh"
 
 # Read stdin JSON for cwd, session_id, transcript_path
 INPUT=$(cat)
@@ -44,32 +46,19 @@ CONFIG_FILE="$LLAKE_ROOT/config.json"
 
 HOOK_NAME="session-end"
 
-# --- Logging ---
-hook_start() {
-  [ -f "$LOG_FILE" ] && [ -n "$(tail -c 1 "$LOG_FILE")" ] && echo " → CRASHED" >> "$LOG_FILE"
-  LOG_MAX=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "logging.maxLines")
-  LOG_KEEP=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "logging.rotateKeepLines")
-  [ -f "$LOG_FILE" ] && [ "$(wc -l < "$LOG_FILE")" -gt "$LOG_MAX" ] && tail -"$LOG_KEEP" "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
-  printf "%s | %-13s | started" "$(date '+%Y-%m-%d %H:%M:%S')" "$HOOK_NAME" >> "$LOG_FILE"
-}
-
-hook_end() {
-  echo " → $1" >> "$LOG_FILE"
-}
-
-hook_start
+hook_start "$HOOK_NAME" "$LOG_FILE" "$CONFIG_FILE" "$LIB_DIR"
 
 # Recursion guard
 AGENT_ID="${LLAKE_AGENT_ID:-}"
 if [ "$IS_LLAKE_AGENT" = "true" ]; then
-  hook_end "skipped: recursion guard [${AGENT_ID:-unknown}]"
+  hook_end "skipped: recursion guard [${AGENT_ID:-unknown}]" "$LOG_FILE"
   exit 0
 fi
 
 # Master toggle
 SC_ENABLED=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "sessionCapture.enabled")
 if [ "$SC_ENABLED" = "false" ]; then
-  hook_end "skipped: sessionCapture disabled"
+  hook_end "skipped: sessionCapture disabled" "$LOG_FILE"
   exit 0
 fi
 
@@ -109,7 +98,7 @@ TRIAGE_PROMPT_FILE="$PROMPTS_DIR/triage.md.tmpl"
 CAPTURE_PROMPT_FILE="$PROMPTS_DIR/capture.md.tmpl"
 
 if [ ! -f "$TRIAGE_PROMPT_FILE" ] || [ ! -f "$CAPTURE_PROMPT_FILE" ]; then
-  hook_end "skipped: missing prompt files (triage or capture)"
+  hook_end "skipped: missing prompt files (triage or capture)" "$LOG_FILE"
   exit 0
 fi
 
@@ -123,7 +112,7 @@ fi
 
 # If we still don't have a transcript, exit gracefully
 if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
-  hook_end "skipped: no transcript found (session: $SESSION_ID)"
+  hook_end "skipped: no transcript found (session: $SESSION_ID)" "$LOG_FILE"
   exit 0
 fi
 
@@ -147,9 +136,9 @@ EXTRACT_EXIT=$?
 
 if [ ! -f "$TRANSCRIPT_FILE" ]; then
   if [ "$EXTRACT_EXIT" -eq 2 ]; then
-    hook_end "skipped: no visible messages [$AGENT_ID] (session: $SESSION_ID)"
+    hook_end "skipped: no visible messages [$AGENT_ID] (session: $SESSION_ID)" "$LOG_FILE"
   else
-    hook_end "skipped: extraction failed (exit $EXTRACT_EXIT) [$AGENT_ID] (session: $SESSION_ID)"
+    hook_end "skipped: extraction failed (exit $EXTRACT_EXIT) [$AGENT_ID] (session: $SESSION_ID)" "$LOG_FILE"
   fi
   rm -rf "$SESSION_DIR"
   exit 0
@@ -170,14 +159,14 @@ fi
 # --- Empty session filter ---
 if [ "$TURN_COUNT" -lt "$MIN_TURNS" ]; then
   rm -rf "$SESSION_DIR"
-  hook_end "skipped: empty session ($TURN_COUNT turns < $MIN_TURNS) [$AGENT_ID] (session: $SESSION_ID)"
+  hook_end "skipped: empty session ($TURN_COUNT turns < $MIN_TURNS) [$AGENT_ID] (session: $SESSION_ID)" "$LOG_FILE"
   exit 0
 fi
 
 # --- Word count filter ---
 if [ "$WORD_COUNT" -lt "$MIN_WORDS" ]; then
   rm -rf "$SESSION_DIR"
-  hook_end "skipped: thin session ($WORD_COUNT words < $MIN_WORDS) [$AGENT_ID]"
+  hook_end "skipped: thin session ($WORD_COUNT words < $MIN_WORDS) [$AGENT_ID]" "$LOG_FILE"
   exit 0
 fi
 
@@ -190,7 +179,7 @@ if [ -f "$SESSION_DIR/meta" ]; then
     # Stale lock — take over
     rm -f "$SESSION_DIR/meta"
   else
-    hook_end "skipped: duplicate (locked by another agent) [$AGENT_ID] (session: $SESSION_ID)"
+    hook_end "skipped: duplicate (locked by another agent) [$AGENT_ID] (session: $SESSION_ID)" "$LOG_FILE"
     exit 0
   fi
 fi
@@ -346,5 +335,5 @@ EOF
 ) </dev/null >/dev/null 2>&1 &
 disown
 
-hook_end "done: spawned agent $AGENT_ID (session: $SESSION_ID, turns: $TURN_COUNT, timeout: ${MAX_TIMEOUT_SEC}s)"
+hook_end "done: spawned agent $AGENT_ID (session: $SESSION_ID, turns: $TURN_COUNT, timeout: ${MAX_TIMEOUT_SEC}s)" "$LOG_FILE"
 exit 0

@@ -36,6 +36,8 @@ SCHEMA_DIR="$PLUGIN_ROOT/schema"
 source "$LIB_DIR/constants.sh"
 # shellcheck source=/dev/null
 source "$LIB_DIR/agent-id.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/hook-log.sh"
 
 # post-merge fires inside a git repo by definition.
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
@@ -59,32 +61,19 @@ CONFIG_FILE="$LLAKE_ROOT/config.json"
 HOOK_NAME="post-merge"
 LOG_FILE="$STATE_DIR/hooks.log"
 
-# --- Logging ---
-hook_start() {
-  [ -f "$LOG_FILE" ] && [ -n "$(tail -c 1 "$LOG_FILE")" ] && echo " → CRASHED" >> "$LOG_FILE"
-  LOG_MAX=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "logging.maxLines")
-  LOG_KEEP=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "logging.rotateKeepLines")
-  [ -f "$LOG_FILE" ] && [ "$(wc -l < "$LOG_FILE")" -gt "$LOG_MAX" ] && tail -"$LOG_KEEP" "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
-  printf "%s | %-13s | started" "$(date '+%Y-%m-%d %H:%M:%S')" "$HOOK_NAME" >> "$LOG_FILE"
-}
-
-hook_end() {
-  echo " → $1" >> "$LOG_FILE"
-}
-
-hook_start
+hook_start "$HOOK_NAME" "$LOG_FILE" "$CONFIG_FILE" "$LIB_DIR"
 
 # Recursion guard
 AGENT_ID="${LLAKE_AGENT_ID:-}"
 if [ "$IS_LLAKE_AGENT" = "true" ]; then
-  hook_end "skipped: recursion guard [${AGENT_ID:-unknown}]"
+  hook_end "skipped: recursion guard [${AGENT_ID:-unknown}]" "$LOG_FILE"
   exit 0
 fi
 
 # Master toggle
 INGEST_ENABLED=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.enabled")
 if [ "$INGEST_ENABLED" = "false" ]; then
-  hook_end "skipped: ingest disabled"
+  hook_end "skipped: ingest disabled" "$LOG_FILE"
   exit 0
 fi
 
@@ -117,7 +106,7 @@ except Exception:
 INGEST_PROMPT_TMPL="$PROMPTS_DIR/ingest.md.tmpl"
 
 if [ ! -f "$INGEST_PROMPT_TMPL" ]; then
-  hook_end "skipped: missing ingest prompt file"
+  hook_end "skipped: missing ingest prompt file" "$LOG_FILE"
   exit 0
 fi
 
@@ -134,13 +123,13 @@ fi
 # Only run on configured branch
 CURRENT_BRANCH=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)
 if [ "$CURRENT_BRANCH" != "$INGEST_BRANCH" ]; then
-  hook_end "skipped: not on $INGEST_BRANCH ($CURRENT_BRANCH)"
+  hook_end "skipped: not on $INGEST_BRANCH ($CURRENT_BRANCH)" "$LOG_FILE"
   exit 0
 fi
 
 # Read last ingested SHA
 if [ ! -f "$SHA_FILE" ]; then
-  hook_end "skipped: no last-ingest-sha file"
+  hook_end "skipped: no last-ingest-sha file" "$LOG_FILE"
   exit 0
 fi
 LAST_SHA=$(cat "$SHA_FILE" | tr -d '[:space:]')
@@ -150,7 +139,7 @@ CURRENT_SHA=$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null)
 
 # Nothing new if same SHA
 if [ "$LAST_SHA" = "$CURRENT_SHA" ]; then
-  hook_end "skipped: no new commits"
+  hook_end "skipped: no new commits" "$LOG_FILE"
   exit 0
 fi
 
@@ -158,7 +147,7 @@ fi
 if ! git -C "$PROJECT_ROOT" log --oneline "$LAST_SHA..$CURRENT_SHA" > /dev/null 2>&1; then
   # If the range is invalid (e.g., force push), reset to current HEAD
   echo "$CURRENT_SHA" > "$SHA_FILE"
-  hook_end "skipped: invalid range, reset SHA to $CURRENT_SHA"
+  hook_end "skipped: invalid range, reset SHA to $CURRENT_SHA" "$LOG_FILE"
   exit 0
 fi
 
@@ -191,7 +180,7 @@ fi
 
 if [ -z "$RELEVANT_FILES" ]; then
   echo "$CURRENT_SHA" > "$SHA_FILE"
-  hook_end "skipped: no relevant file changes ($COMMIT_RANGE)"
+  hook_end "skipped: no relevant file changes ($COMMIT_RANGE)" "$LOG_FILE"
   exit 0
 fi
 
@@ -273,5 +262,5 @@ INGEST_PROMPT=$(python3 "$LIB_DIR/render-prompt.py" \
 ) &
 disown
 
-hook_end "done: spawned agent $AGENT_ID (commits: $COMMIT_RANGE, timeout: ${MAX_TIMEOUT_SEC}s)"
+hook_end "done: spawned agent $AGENT_ID (commits: $COMMIT_RANGE, timeout: ${MAX_TIMEOUT_SEC}s)" "$LOG_FILE"
 exit 0
