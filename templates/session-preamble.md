@@ -20,3 +20,5 @@ Read the **code** for current implementation details. When LoreLake disagrees wi
 Full conventions and operations are in the plugin's `schema/` directory — start at `schema/index.md` for a map of which file owns which rule. Always defer to those files as the canonical spec.
 
 LoreLake is maintained by automated hooks. Do not edit `llake/.state/` (runtime working dir). Do not edit `llake/last-ingest-sha` (ingest cursor).
+
+**Do not edit `llake/` directly.** The wiki is maintained exclusively by automated hooks and the `/llake-lady`, `/llake-bootstrap`, `/llake-lint`, `/llake-doctor` skills. If you notice incorrect or stale content, flag it to the user — do not edit it yourself.
