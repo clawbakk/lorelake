@@ -126,3 +126,39 @@ def test_literal_braces_in_slot_value_are_preserved(tmp_path):
     rc, out, err = render(tmpl, cfg)
     assert rc == 0, err
     assert out == "Examples:\n" + slot_value
+
+
+def test_ingest_template_renders_with_critical_rules_section():
+    """The ingest template must render cleanly and surface the CRITICAL RULES block."""
+    repo_root = REPO_ROOT
+    templates_dir = repo_root / "templates"
+    ingest_tmpl = repo_root / "hooks" / "prompts" / "ingest.md.tmpl"
+    config = templates_dir / "config.default.json"
+
+    result = subprocess.run(
+        [
+            "python3", str(SCRIPT),
+            "--templates-dir", str(templates_dir),
+            str(ingest_tmpl),
+            str(config),
+            "AGENT_ID=test-agent",
+            "PROJECT_ROOT=/tmp/proj",
+            "LAST_SHA=aaaa",
+            "CURRENT_SHA=bbbb",
+            "COMMIT_RANGE=aaaa..bbbb",
+            "PATHSPEC_INCLUDE=-- 'src/'",
+            "LLAKE_ROOT=/tmp/proj/llake",
+            "WIKI_ROOT=/tmp/proj/llake/wiki",
+            "SCHEMA_DIR=/tmp/schema",
+        ],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, f"render failed: {result.stderr}"
+    out = result.stdout
+
+    assert "## CRITICAL RULES" in out, "CRITICAL RULES section missing"
+    # All 9 rules must be present.
+    for n in range(1, 10):
+        assert f"### R{n} —" in out, f"R{n} header missing"
+    # No unresolved placeholders should remain.
+    assert "{{" not in out, f"unresolved placeholder: {out!r}"
