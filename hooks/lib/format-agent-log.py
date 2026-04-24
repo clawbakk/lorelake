@@ -8,7 +8,6 @@ text, cost/usage summary, and errors.
 import argparse
 import json
 import sys
-import textwrap
 from datetime import datetime
 
 
@@ -49,8 +48,6 @@ def main():
     parser = argparse.ArgumentParser(description="Format Claude stream-json into readable agent log")
     parser.add_argument('--extract-result', dest='extract_result_path', default=None,
                         help='Write the agent result text to this file path')
-    parser.add_argument('--allowed-tools', dest='allowed_tools', default='',
-                        help='Comma-separated list of tool names to surface in the INIT line')
     args = parser.parse_args()
 
     turn = 0
@@ -75,13 +72,7 @@ def main():
         if event_type == "system" and subtype == "init":
             model = event.get("model", "?")
             tools = event.get("tools", [])
-            # Filter to just the allowed tools
-            if args.allowed_tools:
-                allowed_set = set(args.allowed_tools.split(','))
-                allowed = [t for t in tools if t in allowed_set]
-            else:
-                allowed = tools
-            print(f"[{ts}] INIT | model={model} tools={','.join(allowed)}")
+            print(f"[{ts}] INIT | model={model} tools={','.join(tools)}")
             sys.stdout.flush()
 
         # --- Assistant message (text + tool_use) ---
