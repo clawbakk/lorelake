@@ -200,6 +200,57 @@ test_agent_exit_137_external_kill() {
   rm -rf "$proj"
 }
 
+test_claude_invocation_flags() {
+  local proj; proj=$(mkproject)
+  add_src_commit "$proj"
+  local record; record=$(mktemp -t llake-claude-args.XXXXXX)
+
+  STUB_EXIT_CODE=0 STUB_RECORD_FILE="$record" run_post_merge "$proj"
+
+  # --tools must be present with the config's allowedTools list.
+  if ! grep -q -- "--tools" "$record"; then
+    FAIL=$((FAIL+1))
+    FAILED_NAMES+=("flags:tools-flag-present")
+    echo "  FAIL [flags:tools-flag-present]: --tools not found in invocation"
+    sed 's/^/    /' "$record"
+  else
+    PASS=$((PASS+1))
+  fi
+
+  # The tool list from mkproject's config is ["Read","Write"].
+  if ! grep -qE -- "--tools[[:space:]]+['\"]?Read,Write" "$record"; then
+    FAIL=$((FAIL+1))
+    FAILED_NAMES+=("flags:tools-value")
+    echo "  FAIL [flags:tools-value]: --tools value missing expected Read,Write"
+    sed 's/^/    /' "$record"
+  else
+    PASS=$((PASS+1))
+  fi
+
+  # --strict-mcp-config must be present.
+  if ! grep -q -- "--strict-mcp-config" "$record"; then
+    FAIL=$((FAIL+1))
+    FAILED_NAMES+=("flags:strict-mcp-config-present")
+    echo "  FAIL [flags:strict-mcp-config-present]: --strict-mcp-config missing"
+    sed 's/^/    /' "$record"
+  else
+    PASS=$((PASS+1))
+  fi
+
+  # --allowedTools must NOT be present (replaced by --tools).
+  if grep -q -- "--allowedTools" "$record"; then
+    FAIL=$((FAIL+1))
+    FAILED_NAMES+=("flags:allowedTools-absent")
+    echo "  FAIL [flags:allowedTools-absent]: --allowedTools still used"
+    sed 's/^/    /' "$record"
+  else
+    PASS=$((PASS+1))
+  fi
+
+  rm -f "$record"
+  rm -rf "$proj"
+}
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -212,6 +263,7 @@ run_test "render fails — no ghost"  test_render_fails_no_ghost_agent
 run_test "exit 0 advances SHA"      test_agent_exit_0_advances_sha
 run_test "exit 1 does not advance"  test_agent_exit_1_no_advance
 run_test "exit 137 external kill"   test_agent_exit_137_external_kill
+run_test "claude invocation flags"  test_claude_invocation_flags
 
 echo
 echo "Passed: $PASS"

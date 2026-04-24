@@ -254,7 +254,8 @@ rm -f "$RENDER_STDERR_FILE"
   # otherwise return the formatter's exit code (always 0).
   (
     claude $MODEL_FLAG $EFFORT_FLAG -p "$INGEST_PROMPT" \
-    --allowedTools "$ALLOWED_TOOLS" \
+    --tools "$ALLOWED_TOOLS" \
+    --strict-mcp-config \
     --max-budget-usd "$MAX_BUDGET_USD" \
     --output-format stream-json --verbose 2>&1 \
     | python3 "$LIB_DIR/format-agent-log.py" >> "$AGENT_LOG"
