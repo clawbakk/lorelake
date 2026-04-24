@@ -15,6 +15,8 @@ PREAMBLE_FILE="$TEMPLATES_DIR/session-preamble.md"
 source "$LIB_DIR/constants.sh"
 # shellcheck source=/dev/null
 source "$LIB_DIR/detect-project-root.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/hook-log.sh"
 
 # Read stdin JSON for cwd
 INPUT=$(cat)
@@ -33,6 +35,14 @@ PROJECT_ROOT=$(detect_project_root "${CWD:-$PWD}" 2>/dev/null) || exit 0
 LLAKE_ROOT="$PROJECT_ROOT/$LLAKE_DIR_NAME"
 INDEX_FILE="$LLAKE_ROOT/index.md"
 
+STATE_DIR="$LLAKE_ROOT/.state"
+LOG_FILE="$STATE_DIR/hooks.log"
+CONFIG_FILE="$LLAKE_ROOT/config.json"
+mkdir -p "$STATE_DIR"
+
+HOOK_NAME="session-start"
+hook_start "$HOOK_NAME" "$LOG_FILE" "$CONFIG_FILE" "$LIB_DIR"
+
 PREAMBLE=""
 [ -f "$PREAMBLE_FILE" ] && PREAMBLE=$(cat "$PREAMBLE_FILE")
 
@@ -40,6 +50,7 @@ INDEX=""
 [ -f "$INDEX_FILE" ] && INDEX=$(cat "$INDEX_FILE")
 
 if [ -z "$PREAMBLE" ] && [ -z "$INDEX" ]; then
+  hook_end "skipped: no preamble or index" "$LOG_FILE"
   exit 0
 fi
 
@@ -66,3 +77,5 @@ output = {
 }
 print(json.dumps(output))
 PYEOF
+
+hook_end "context injected" "$LOG_FILE"

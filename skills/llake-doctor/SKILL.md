@@ -1,6 +1,6 @@
 ---
 name: llake-doctor
-description: Use when verifying or repairing an existing LoreLake install — after a fresh clone, plugin upgrade, or suspected drift. Invoked via /llake-doctor.
+description: Use when verifying or repairing an existing LoreLake install — after a fresh clone, plugin upgrade, or suspected drift. Invoked via /llake-doctor, or via the Skill tool from the /llake-lady install plan.
 disable-model-invocation: true
 ---
 
@@ -42,6 +42,16 @@ Echo both resolved paths to the user in a single line before Phase 1 so a wrong 
 Run every check below in order and **accumulate issues in an internal list**. Do not emit user-visible output in this phase and do not apply fixes yet. Collecting all issues before any repair is what lets Phase 3 print a coherent before/after view — the report's `[CHECK]` lines must reflect state at the moment of inspection, not state after a partial repair has altered it.
 
 Each check records zero or more issues. An issue is a `(category, detail, fix)` tuple — the category drives the report's `[CHECK]` label, the detail is what to show after the colon, and the fix is the action Phase 2 will perform.
+
+### Check 0 — Python 3 runtime
+
+Run `command -v python3 >/dev/null 2>&1` and `python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)'`. If either fails, record a single **critical** issue: "python3 3.8+ not available".
+
+The hooks shell out to `python3` constantly — if it is missing or too old, every hook fails silently and nothing in the wiki gets updated. Doctor cannot repair this; the user must install Python themselves.
+
+If Check 0 fails, skip Checks 1–8 entirely. Emit the report with one `[CHECK]` line for Check 0 and `SKIPPED (python3 unavailable)` for every later check. No `[FIX]` lines. The summary reads: `Summary: python3 is not available (or too old). Install Python 3.8+, then re-run /llake-doctor.`
+
+---
 
 ### Check 1 — LoreLake structure
 
@@ -113,11 +123,21 @@ Record a single issue listing every missing dot-path. This becomes the forward-m
 
 Do NOT record issues for keys the user's config has but the plugin's defaults no longer ship — those are user-managed leftovers from an older plugin version. The spec is explicit about this: retired keys are left in place, the user removes them manually if they want.
 
+### Check 8 — Orphaned install plan
+
+If `<project>/llake/.state/install-plan.md` exists, it is a leftover from a crashed or interrupted executor run. The plan is install-time only; nothing reads it after Phase 4 of the install.
+
+Record an issue only if the file both exists AND its first non-blank line matches the pattern `# LoreLake Install Plan — *`. The header guard avoids deleting an unrelated file a user may have written at the same path.
+
 ---
 
 ## Phase 2 — Repair
 
 Apply fixes in the order below. Every fix is idempotent: if the target state already matches, skip silently; otherwise apply the minimal change. This phase emits no user-visible output either — Phase 3 prints the combined `[CHECK]` and `[FIX]` lines together.
+
+### Fix — Python 3 runtime (diagnostic-only)
+
+This is not a fix doctor applies. If Check 0 failed, Phase 2 skips every other fix as well — the remediation is user-driven ("install python3 3.8+"). The `[CHECK]` line in Phase 3 carries the full remediation message.
 
 ### Fix — Missing LoreLake structure
 
@@ -155,14 +175,38 @@ If `<project>/.gitignore` is missing, create it containing the single line `llak
 
 Skip entirely if `<project>/.git/` does not exist.
 
-Write `<project>/.git/hooks/post-merge` with exactly:
+Inspect `<project>/.git/hooks/post-merge`:
 
-```bash
-#!/bin/bash
-exec "<$PLUGIN_ROOT absolute path>/hooks/post-merge.sh" "$@"
-```
+1. **If the file does not exist** → write the plain LoreLake shim and `chmod +x`:
+   ```bash
+   #!/bin/bash
+   exec "<$PLUGIN_ROOT absolute path>/hooks/post-merge.sh" "$@"
+   ```
+2. **If the file exists and contains the literal substring `hooks/post-merge.sh`** → it is already a LoreLake shim (plain or chain). Re-write it to match the expected form for its variant, preserving the chaining clause if a `post-merge.pre-llake` file exists alongside. In practice this is a no-op on a healthy install; it self-heals if the plugin path has changed.
+3. **If the file exists and does NOT contain `hooks/post-merge.sh`** → collision. Ask the user the same question lady asks in Phase 2.5 via `AskUserQuestion`:
 
-Substitute the resolved absolute `$PLUGIN_ROOT` literally. Then `chmod +x` the file. Writing the full contents (rather than patching) resolves "missing", "drifted", and "not executable" in one operation.
+   > "A non-LoreLake `post-merge` hook is present at `<project>/.git/hooks/post-merge`. How should doctor proceed?"
+   > - **[A] Chain — preserve the existing hook.** Move it to `post-merge.pre-llake`, write the chaining shim.
+   > - **[B] Skip — leave it alone.** Doctor records this as a `NOT WIRED` warning in the report and moves on.
+
+   On [A]: perform the same backup + chain-shim write that lady's plan does (see `templates/plan.md.tmpl` Phase 3, `chain` strategy). The chaining shim content is:
+
+   ```bash
+   #!/bin/bash
+   rc=0
+   "<$PLUGIN_ROOT absolute path>/hooks/post-merge.sh" "$@" || rc=$?
+   chained="$(dirname "$0")/post-merge.pre-llake"
+   if [ -x "$chained" ]; then
+     "$chained" "$@"
+     chained_rc=$?
+     [ "$chained_rc" -ne 0 ] && exit "$chained_rc"
+   fi
+   exit "$rc"
+   ```
+
+   On [B]: do not touch the file. The report prints `[CHECK] Post-merge hook : EXISTING USER HOOK (LoreLake not wired)` and the Phase 3 summary notes that ingest will not run until the user wires it manually.
+
+The backup file `post-merge.pre-llake` is created at most once — on first collision — and is **never deleted** by doctor. If the backup is missing on a subsequent run (user removed it), doctor notes it as informational (`post-merge.pre-llake absent`) and moves on without recreating it.
 
 ### Fix — Plugin manifest integrity
 
@@ -192,6 +236,10 @@ Only runs when Check 6 or Check 7 recorded issues. The merge is additive:
 
 If Check 6 recorded "newer than plugin" instead of "needs upgrade", skip this fix entirely and let the warning surface in the report — doctor does not downgrade configs.
 
+### Fix — Delete orphaned install plan
+
+For the issue recorded by Check 8, run the equivalent of `rm -f <project>/llake/.state/install-plan.md`. No report entry needed beyond the Phase 3 `[FIX] Removed orphaned install plan : DONE` line.
+
 ---
 
 ## Phase 3 — Report
@@ -213,6 +261,7 @@ Plugin:  /absolute/path/to/plugin
 [CHECK] Stale manual entries       : NONE
 [CHECK] Config schema version      : OK (1)
 [CHECK] Config key coverage        : 2 keys missing → merging from defaults
+[CHECK] Orphaned install plan      : OK
 
 [FIX] Appending llake/.state/ to .gitignore           : DONE
 [FIX] Wiring .git/hooks/post-merge                    : DONE
@@ -224,6 +273,11 @@ Summary: 3 issues, 3 fixed. LoreLake is healthy.
 Rules for the report:
 
 - One `[CHECK]` line per check, in the order of Phase 1 (1 through 7, but collapse Check 1 into a single structure line unless there are many missing paths — in which case list them on sub-lines).
+- `[CHECK] Post-merge hook` possible values:
+  - `OK` — our shim (plain or chain) is in place and executable.
+  - `NOT WIRED (git repo present)` — no hook file, fixed by this run.
+  - `EXISTING USER HOOK (LoreLake not wired)` — user picked [B] during collision; informational, not an error.
+  - `DRIFTED — rewrote` — stale LoreLake shim, self-healed.
 - One `[FIX]` line per repair that actually ran. Skip fixes that were no-ops. If a fix failed, show `: FAILED — <reason>` and mention it in the summary.
 - Summary line always appears last. Templates:
   - All healthy: `Summary: 0 issues. LoreLake is healthy.`

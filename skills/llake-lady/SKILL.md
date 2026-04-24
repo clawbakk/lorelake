@@ -29,24 +29,30 @@ Echo both paths back to the user in a single line before Phase 1 so a wrong CWD 
 
 Verify in order. On any failure, emit a clear message naming the missing prerequisite and the fix, then stop. **Do not auto-install anything** — the user owns their toolchain.
 
-1. **Project root looks real.** At least one of these must exist in `$PROJECT_ROOT`:
+1. **Python 3 available.** Run `command -v python3 >/dev/null 2>&1` and `python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)'`. If either fails, stop:
+
+   > "LoreLake requires `python3` 3.8 or newer in PATH. Install Python 3.8+ (https://www.python.org/downloads/ or your distro package manager), then re-run `/llake-lady`."
+
+   Do not attempt to install Python automatically.
+
+2. **Project root looks real.** At least one of these must exist in `$PROJECT_ROOT`:
    - `.git/`
    - `CLAUDE.md`
    - A common manifest: `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `pom.xml`, `build.gradle`
 
    If none: "The current directory does not look like a project root. `cd` into the project and re-run `/llake-lady`."
 
-2. **Git-initialized.** Run `git -C "$PROJECT_ROOT" rev-parse --show-toplevel`. If it fails, do **not** stop — emit a warning and continue:
+3. **Git-initialized.** Run `git -C "$PROJECT_ROOT" rev-parse --show-toplevel`. If it fails, do **not** stop — emit a warning and continue:
    > "`$PROJECT_ROOT` is not a git repo. The post-merge ingest hook will be deferred. Run `git init` then `/llake-doctor` to finish wiring."
 
-3. **Plugin templates readable.** Confirm these files exist and are readable:
+4. **Plugin templates readable.** Confirm these files exist and are readable:
    - `$PLUGIN_ROOT/templates/config.default.json`
    - `$PLUGIN_ROOT/templates/plan.md.tmpl`
    - `$PLUGIN_ROOT/templates/index.md.tmpl`
 
    If any is missing: "Plugin install appears incomplete (missing `<file>`). Reinstall the plugin."
 
-4. **No existing install.** If `$PROJECT_ROOT/llake/` exists (even as an empty directory): stop. "LoreLake is already installed in this project at `<absolute path>/llake/`. Run `/llake-doctor` to diagnose or repair, or remove that directory first."
+5. **No existing install.** If `$PROJECT_ROOT/llake/` exists (even as an empty directory): stop. "LoreLake is already installed in this project at `<absolute path>/llake/`. Run `/llake-doctor` to diagnose or repair, or remove that directory first."
 
 ---
 
@@ -65,6 +71,31 @@ Keep the findings in session memory. Don't dump raw file contents back to the us
 
 ---
 
+## Phase 2.5 — Post-merge collision check
+
+Only run this phase if `$PROJECT_ROOT/.git/` exists. Skip entirely otherwise — there is no hook to collide with yet, and doctor will wire the hook when the user runs `git init`.
+
+Inspect `$PROJECT_ROOT/.git/hooks/post-merge`:
+
+- If the file does not exist → no collision. Set `post_merge_strategy = "install"` in session memory. Skip to Phase 3.
+- If the file exists and contains the literal substring `hooks/post-merge.sh` → it is already a LoreLake shim (from a prior install). Set `post_merge_strategy = "install"` (the executor will rewrite it harmlessly — idempotent). Skip to Phase 3.
+- If the file exists and does NOT contain `hooks/post-merge.sh` → collision. Continue below.
+
+**Collision: ask the user** via `AskUserQuestion`, regardless of auto/interactive mode. Phrase:
+
+> "A `post-merge` git hook already exists at `$PROJECT_ROOT/.git/hooks/post-merge`. How would you like LoreLake to install?"
+
+Options:
+
+- **[A] Chain — preserve the existing hook.** The installer backs the current hook up to `post-merge.pre-llake` and writes a LoreLake shim that runs the plugin first and then the backup. Your hook continues to run on every merge.
+- **[B] Skip — I'll wire it manually.** The installer does not touch `.git/hooks/post-merge`. Ingest will not run automatically until you wire it yourself; the plan's final output includes manual instructions.
+
+Store the answer as `post_merge_strategy = "chain"` or `post_merge_strategy = "skip"`.
+
+Phase 5's plan rendering consumes this value as the `{{POST_MERGE_STRATEGY}}` placeholder. Possible values: `install`, `chain`, `skip`.
+
+---
+
 ## Phase 3 — Mode selection
 
 Ask the user exactly one question, via the `AskUserQuestion` tool. The recommended option (**Auto**) goes first.
@@ -76,13 +107,42 @@ Phrase the question as "How would you like me to install LoreLake?". Wait for th
 
 ---
 
+## Phase 3.5 — Critical config prompts
+
+Even in auto mode, two config values have no sensible default: `ingest.branch` (depends on the repo) and `ingest.include` (depends on the codebase layout). Ask the user both, using `AskUserQuestion`, regardless of the mode chosen in Phase 3.
+
+### Question 1 — Branch
+
+Suggested default = the branch you resolved in Phase 2. Present one option with that branch preselected, plus an explicit "other" option the user can type into. Phrase the question: "Which branch should the post-merge ingest hook watch?"
+
+Accept the answer as a non-empty string. If the user picks the suggested default, use the discovered branch; if they type an override, use that.
+
+### Question 2 — Ingest scope
+
+Build the suggested default by scanning `$PROJECT_ROOT`:
+
+1. List directories at the top level only (one directory deep).
+2. Exclude: any entry whose name begins with `.` or `_`, plus the literal names `llake`, `node_modules`, `venv`, `.venv`, `dist`, `build`, `target`, `.next`, `.nuxt`, `.cache`, `coverage`, `tmp`.
+3. Sort the remaining names alphabetically. Append a trailing `/` to each (matching the `src/` style already shipped in `config.default.json`).
+
+Present the resulting list as the proposed `ingest.include`. If the list is empty after filtering, fall back to `["src/"]` and state that in the question: "No obvious code directories found; defaulting to `src/`. Override if your code lives elsewhere."
+
+Accept the answer as a JSON array of strings. If the user keeps the default, use the discovered list; if they edit it, parse and validate the edited version.
+
+### Storing the answers
+
+Keep both answers in session memory under the names `answered_branch` and `answered_include`. Phase 4 (auto) and Phase 4-alt (interactive) both consume them.
+
+---
+
 ## Phase 4 — Render config (Auto mode)
 
 Render `$PROJECT_ROOT/llake/config.json` as a **full** copy of `templates/config.default.json`, not a minimal subset. Pedagogy beats minimalism — the user should see every knob immediately. Apply these adjustments:
 
 - **Preserve every `_comment` field** at its section. These are the inline documentation future-you (the user) will read when editing the file by hand.
 - **Apply discovered values where they are unambiguous:**
-  - `ingest.branch` → the branch resolved in Phase 2.
+  - `ingest.branch` → the value `answered_branch` collected in Phase 3.5.
+  - `ingest.include` → the array `answered_include` collected in Phase 3.5.
   - `prompts.ingest.EXAMPLES` → fill only if `CLAUDE.md` supplies enough domain-specific signal to author two or three short, concrete worked examples in the style of `templates/generic-examples.md`. **Do not invent fabricated examples.** If uncertain, leave it as `""` and the prompt renderer will fall back to the shipped generic set.
 - **Every other key stays at its default.** The user can edit `config.json` later; over-customization at install is friction with no payoff.
 
@@ -92,7 +152,11 @@ Write the config. Move to Phase 5.
 
 ### Phase 4-alt — Render config (Interactive mode)
 
-Walk each section of `templates/config.default.json` in order (`llake`, `sessionCapture`, `ingest`, `transcript`, `logging`, `prompts`). For each leaf key (ignore `_comment` and `_schemaVersion` — those are plumbing):
+Walk each section of `templates/config.default.json` in order (`llake`, `sessionCapture`, `ingest`, `transcript`, `logging`, `prompts`).
+
+> Skip `ingest.branch` and `ingest.include` — Phase 3.5 already collected them. Use the `answered_branch` and `answered_include` values directly. All other keys in the `ingest` section (and every other section) are still walked.
+
+For each leaf key (ignore `_comment` and `_schemaVersion` — those are plumbing):
 
 1. Show the default value from the template.
 2. Show the discovered value if any (e.g., the branch you found).
@@ -113,10 +177,12 @@ Read `$PLUGIN_ROOT/templates/plan.md.tmpl`. Substitute these placeholders:
 | `{{PLUGIN_PATH}}` | `$PLUGIN_ROOT` — absolute, fully resolved, **not** a symlink. The plan embeds this so the executor (or any future session) can find the plugin from a different working directory. |
 | `{{PROJECT_ROOT}}` | Absolute path to the project. |
 | `{{EMBEDDED_CONFIG}}` | The JSON you wrote in Phase 4, pretty-printed, with `_comment` fields preserved. This makes the plan self-contained — the user can regenerate `config.json` from the plan alone if needed. |
+| `{{PLAN_PATH}}` | The absolute path `$PROJECT_ROOT/llake/.state/install-plan.md` — the executor reads this to know which file to delete in its final step. |
+| `{{POST_MERGE_STRATEGY}}` | The value `install`, `chain`, or `skip` chosen in Phase 2.5 (or `install` if the project is not a git repo or has no pre-existing hook). |
 
-Write the filled plan to `$PROJECT_ROOT/llake/install-plan.md`.
+Write the filled plan to `$PROJECT_ROOT/llake/.state/install-plan.md`. Create `$PROJECT_ROOT/llake/.state/` first if it does not exist — the executor will create the rest of the `.state/` subtree in its Phase 1, but the plan itself must land before then. The `.state/` directory is covered by the installer's `.gitignore` entry, so the plan never enters git history.
 
-This is the last file the wizard writes. Phase 7's executor handles everything else.
+This is the last file the wizard writes. Phase 7's executor handles everything else — including deleting this plan file as its final step.
 
 ---
 
@@ -167,6 +233,7 @@ Rules:
 5. Write surface: <project>/llake/**, <project>/.gitignore, and <project>/.git/hooks/post-merge. Do NOT write anywhere else. Claude Code hook registration is handled by the plugin manifest, not the installer.
 6. Phase 4 invokes /llake-doctor. Invoke that skill via the Skill tool available in this session. If doctor reports issues, surface its full report verbatim in your summary.
 7. Phase 5 is informational — do NOT run /llake-bootstrap. Bootstrap is the user's next step, not yours.
+8. Your last action after Phase 4 completes is to delete the plan file at the path passed as "Plan path". Do not keep it, do not move it — delete only. If the delete fails (e.g. permissions), surface the error in your summary but do not treat it as a plan failure.
 
 When done, print a concise summary: the paths you wrote, any warnings (non-git repo, skipped steps, etc.), and the doctor report from Phase 4.
 ```
@@ -181,11 +248,11 @@ Wait for the subagent's summary. Relay its key points in Phase 8.
 
 Print a concise summary that always names:
 
-- **Install plan:** `<absolute path to install-plan.md>`
+- **Install plan:** executed and deleted (was at `<project>/llake/.state/install-plan.md`; removed after Phase 4 to keep the wiki store clean)
 - **Config:** `<project>/llake/config.json`
 - **Log:** `<project>/llake/log.md` (records each phase the executor completed; the tail is a resume cursor)
 - **Doctor:** the report the executor surfaced from Phase 4 of the plan (or a note that doctor reported zero issues)
-- **Next recommended step:** `/llake-bootstrap` when the user is ready to populate the initial wiki.
+- **Next recommended step:** Run `/llake-bootstrap` when you're ready to populate the initial wiki. We recommend starting a fresh Claude Code session first — bootstrap is resource-heavy.
 
 If the project was not a git repo, also remind the user: "Run `git init`, then `/llake-doctor`, to finish wiring the post-merge hook."
 

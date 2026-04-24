@@ -3,6 +3,7 @@
 > Generated: {{DATE}}
 > Plugin install: {{PLUGIN_PATH}}
 > Project root: {{PROJECT_ROOT}}
+> Plan path: {{PLAN_PATH}}
 
 This plan installs LoreLake into `{{PROJECT_ROOT}}/llake/`. Execute it once. It is idempotent — re-running is safe and skips already-completed steps. On interrupt, resume by re-running and logging into `{{PROJECT_ROOT}}/llake/log.md`.
 
@@ -44,19 +45,51 @@ Each phase appends a completion entry to `log.md`. Resumption: read the log tail
 
 ## Phase 3 — Wire git post-merge hook
 
-- [ ] If `{{PROJECT_ROOT}}/.git/` exists:
-  - Write to `{{PROJECT_ROOT}}/.git/hooks/post-merge`:
+Strategy (decided by the wizard): `{{POST_MERGE_STRATEGY}}`
+
+- [ ] **If `{{POST_MERGE_STRATEGY}}` is `install`** (no prior hook, or the prior hook is already a LoreLake shim):
+  - If `{{PROJECT_ROOT}}/.git/` exists:
+    - Write to `{{PROJECT_ROOT}}/.git/hooks/post-merge`:
+      ```
+      #!/bin/bash
+      exec "{{PLUGIN_PATH}}/hooks/post-merge.sh" "$@"
+      ```
+    - Run: `chmod +x {{PROJECT_ROOT}}/.git/hooks/post-merge`
+  - If not a git repo:
+    - Print warning: "Not a git repository. Post-merge ingest will not work until you run `git init` then `/llake-doctor`."
+    - Do NOT fail the plan
+
+- [ ] **If `{{POST_MERGE_STRATEGY}}` is `chain`** (a user-owned hook exists and should be preserved):
+  - Move the existing hook aside: `mv {{PROJECT_ROOT}}/.git/hooks/post-merge {{PROJECT_ROOT}}/.git/hooks/post-merge.pre-llake` (leave the backup executable and untouched from this point forward — doctor will never delete it).
+  - Write to `{{PROJECT_ROOT}}/.git/hooks/post-merge` the chaining shim:
     ```
     #!/bin/bash
-    exec "{{PLUGIN_PATH}}/hooks/post-merge.sh" "$@"
+    rc=0
+    "{{PLUGIN_PATH}}/hooks/post-merge.sh" "$@" || rc=$?
+    chained="$(dirname "$0")/post-merge.pre-llake"
+    if [ -x "$chained" ]; then
+      "$chained" "$@"
+      chained_rc=$?
+      [ "$chained_rc" -ne 0 ] && exit "$chained_rc"
+    fi
+    exit "$rc"
     ```
   - Run: `chmod +x {{PROJECT_ROOT}}/.git/hooks/post-merge`
-- [ ] If not a git repo:
-  - Print warning: "Not a git repository. Post-merge ingest will not work until you run `git init` then `/llake-doctor`."
-  - Do NOT fail the plan
+
+- [ ] **If `{{POST_MERGE_STRATEGY}}` is `skip`** (user will wire manually):
+  - Do NOT touch `{{PROJECT_ROOT}}/.git/hooks/post-merge`.
+  - Print the following instructions verbatim for the user, as part of the phase output:
+
+    > Manual wiring: to enable LoreLake's post-merge ingest, merge the following two lines into your existing `.git/hooks/post-merge` (e.g. at the end):
+    > ```
+    > # LoreLake ingest
+    > "{{PLUGIN_PATH}}/hooks/post-merge.sh" "$@"
+    > ```
+    > Keep your existing hook logic as-is. `/llake-doctor` will re-check the wiring on demand and offer to chain automatically if you change your mind.
+
 - [ ] **Append to `{{PROJECT_ROOT}}/llake/log.md`:**
   ```
-  ## [{{DATE}}] install-plan | Phase 3 complete: post-merge wired (or deferred)
+  ## [{{DATE}}] install-plan | Phase 3 complete: post-merge strategy={{POST_MERGE_STRATEGY}}
   ```
 
 ## Phase 4 — Verify install
@@ -72,6 +105,14 @@ Each phase appends a completion entry to `log.md`. Resumption: read the log tail
 
 - [ ] When ready to populate the wiki, invoke `/llake-bootstrap`
 - [ ] (This phase does NOT log here — bootstrap logs its own entry)
+
+## Phase 6 — Clean up the install plan
+
+- [ ] Delete this plan file: `rm -f {{PLAN_PATH}}`
+- [ ] **Append to `{{PROJECT_ROOT}}/llake/log.md`:**
+  ```
+  ## [{{DATE}}] install-plan | Phase 6 complete: plan file removed
+  ```
 
 ---
 
