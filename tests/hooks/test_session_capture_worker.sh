@@ -123,10 +123,58 @@ test_capture_agent_fails() {
   rm -rf "$proj"
 }
 
+test_watchdog_timeout_during_triage() {
+  local proj; proj=$(mkproject)
+  local tr="$proj/transcript.jsonl"; make_fake_transcript "$tr"
+
+  # Tighten the worker's timeout to 1s so the watchdog fires before the
+  # claude stub returns. Stub sleeps 5s during triage.
+  python3 -c "
+import json, sys
+p = sys.argv[1]
+with open(p) as f: d = json.load(f)
+d['sessionCapture']['timeoutSeconds'] = 1
+with open(p, 'w') as f: json.dump(d, f)
+" "$proj/llake/config.json"
+
+  STUB_DELAY_SEC=5 STUB_EXIT_CODE=0 \
+    run_worker "$proj" "sess-watchdog" "$tr"
+
+  # Watchdog must have fired and logged a timeout in hooks.log.
+  assert_log_grep "watchdog:timeout-line" "$proj/llake/.state/hooks.log" "timeout: agent.*phase: triage"
+
+  # No 'completed: agent' line should appear (capture must not have run).
+  assert_log_no_grep "watchdog:no-capture" "$proj/llake/.state/hooks.log" "completed: agent"
+
+  # Note: _agent_cleanup intentionally leaves SESSION_DIR intact for
+  # post-mortem inspection; lock staleness handles the next-agent takeover.
+
+  rm -rf "$proj"
+}
+
+test_triage_failure_no_session_residue() {
+  local proj; proj=$(mkproject)
+  local tr="$proj/transcript.jsonl"; make_fake_transcript "$tr"
+
+  STUB_EXIT_CODE=1 run_worker "$proj" "sess-tri-fail" "$tr"
+
+  # Triage failure must remove SESSION_DIR (worker's TRIAGE_EXIT branch).
+  if [ -d "$proj/llake/.state/sessions/sess-tri-fail" ]; then
+    FAIL=$((FAIL+1)); FAILED_NAMES+=("triage-fail:session-residue")
+    echo "  FAIL [triage-fail:session-residue]: SESSION_DIR persisted after triage failure"
+  else
+    PASS=$((PASS+1))
+  fi
+
+  rm -rf "$proj"
+}
+
 echo "-- triage SKIP";                 test_triage_skip
 echo "-- triage CAPTURE + success";    test_triage_capture_success
 echo "-- triage agent fails";          test_triage_agent_fails
 echo "-- capture agent fails";         test_capture_agent_fails
+echo "-- watchdog timeout (triage)";   test_watchdog_timeout_during_triage
+echo "-- triage failure no residue";   test_triage_failure_no_session_residue
 
 echo
 echo "Passed: $PASS"
