@@ -82,7 +82,7 @@ MIDDLE_MAX_SIZE=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "transcript.m
 MIDDLE_SCALE_START=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "transcript.middleScaleStart")
 MAX_MSG_LEN=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "transcript.maxMessageLength")
 
-# Convert allowedTools JSON array to comma-separated string for --allowedTools flag
+# Convert allowedTools JSON array to comma-separated string for the --tools flag
 ALLOWED_TOOLS=$(python3 -c "import json,sys; print(','.join(json.loads(sys.argv[1])))" "$ALLOWED_TOOLS_JSON" 2>/dev/null || echo "Read,Write,Edit,Glob,Grep,Bash")
 
 # Build writable categories section for agent prompt
@@ -229,7 +229,7 @@ EOF
   TRIAGE_RESULT_FILE="$SESSION_DIR/triage-result.txt"
 
   # --- Prepare triage prompt ---
-  TRIAGE_RENDER_ERR=$(mktemp -t llake-render.XXXXXX)
+  TRIAGE_RENDER_ERR="$AGENT_DIR/triage-render.err"
   TRIAGE_PROMPT=$(python3 "$LIB_DIR/render-prompt.py" \
     --templates-dir "$TEMPLATES_DIR" \
     "$PROMPTS_DIR/triage.md.tmpl" \
@@ -317,7 +317,7 @@ EOF
   fi
 
   # --- Prepare capture prompt ---
-  CAPTURE_RENDER_ERR=$(mktemp -t llake-render.XXXXXX)
+  CAPTURE_RENDER_ERR="$AGENT_DIR/capture-render.err"
   CAPTURE_PROMPT=$(python3 "$LIB_DIR/render-prompt.py" \
     --templates-dir "$TEMPLATES_DIR" \
     "$PROMPTS_DIR/capture.md.tmpl" \

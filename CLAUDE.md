@@ -109,3 +109,4 @@ Bootstrap has **no `bootstrap.*` config keys** — model/effort/budget/timeout a
 - **Config fallback contract**: tests in `tests/lib/test_read_config.py` encode that `config.default.json` is the source of truth for defaults. Do not duplicate defaults into user-facing configs or hook scripts.
 - **Prompt renderer is strict**: unresolved placeholders exit nonzero. When adding a new `{{VAR}}`, wire it through both the caller (hook shell script) and the template's placeholder — tests will catch it.
 - **Schema is immutable to agents**: the `schema/` files document the spec; bootstrap/ingest/capture prompts all forbid writing to any of them.
+- **Custom slot values can contain literal `{{...}}` text**: the renderer's strictness applies to TEMPLATE placeholders, not to the content of slot values. Documentation that mentions placeholder syntax in a slot value is preserved verbatim. Tested by `test_literal_braces_in_slot_value_are_preserved`.

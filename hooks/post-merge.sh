@@ -196,7 +196,7 @@ EOF
 
 # Build the ingest prompt via the shared template renderer.
 # Capture stderr separately so we can surface render failures clearly.
-RENDER_STDERR_FILE=$(mktemp -t llake-render-stderr.XXXXXX)
+RENDER_STDERR_FILE="$AGENT_DIR/render-stderr.tmp"
 INGEST_PROMPT=$(python3 "$LIB_DIR/render-prompt.py" \
   --templates-dir "$TEMPLATES_DIR" \
   "$INGEST_PROMPT_TMPL" \

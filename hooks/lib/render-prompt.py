@@ -10,7 +10,21 @@ Usage:
   render-prompt.py <template-path> <config-json-path> [VAR=value ...]
 
 Output: rendered prompt to stdout.
-Exits nonzero if any unresolved {{VAR}} or {{VAR|fallback:...}} remains.
+Exits nonzero if any TEMPLATE placeholder is unresolved.
+
+Substitution model — important:
+  Resolution is single-pass. PLACEHOLDER_RE.sub scans the template only,
+  not the rendered output. Therefore a custom slot value that itself
+  contains '{{NAME}}' text is preserved verbatim — it is treated as
+  literal content, not as a second-pass placeholder. This is intentional:
+  documentation and prompt examples often mention placeholder syntax,
+  and second-pass substitution would corrupt them. The contract:
+
+    - Strict: every placeholder appearing in the TEMPLATE must resolve.
+    - Lenient: '{{...}}' text inside a SLOT VALUE is literal content.
+
+  Pinned by tests/lib/test_render_prompt.py::
+    test_literal_braces_in_slot_value_are_preserved
 """
 import argparse
 import json
