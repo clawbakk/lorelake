@@ -185,3 +185,91 @@ def test_read_result_truncated_at_500():
     out = feed([assistant, user])
     # Read results cap at 500 with a truncation marker
     assert "[500 chars truncated]" in out
+
+
+def test_formatter_skips_malformed_json_lines():
+    """Lines that fail json.loads are skipped silently — they are not events."""
+    init = json.dumps({"type": "system", "subtype": "init",
+                       "model": "x", "tools": ["Read"]})
+    out = feed([init, "garbage not json", init])
+    assert out.count("INIT |") == 2
+
+
+def test_formatter_fails_loudly_on_unexpected_event_shape():
+    """An unexpected event structure causes nonzero exit and stderr diagnostic."""
+    bad_event = json.dumps({
+        "type": "assistant",
+        "message": {
+            "content": ["this string should be a dict block"],
+            "usage": {"input_tokens": 1, "output_tokens": 1,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation_input_tokens": 0},
+        },
+    })
+    result = subprocess.run(
+        ["python3", str(SCRIPT)],
+        input=bad_event,
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0, (
+        f"expected nonzero exit; got rc={result.returncode}, "
+        f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+    )
+    assert "format-agent-log:" in result.stderr
+    assert "unexpected error" in result.stderr.lower()
+
+
+def test_truncate_handles_none_and_empty():
+    """truncate(None) and truncate('') both return the empty string."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("fmt_agent_log", str(SCRIPT))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    assert mod.truncate(None) == ""
+    assert mod.truncate("") == ""
+    assert mod.truncate("hello") == "hello"
+    long_text = "x" * 600
+    assert mod.truncate(long_text, 500) == "x" * 500 + "... [100 chars truncated]"
+
+
+def test_extract_result_writes_file(tmp_path):
+    """--extract-result writes the result text to a file."""
+    result_path = tmp_path / "result.txt"
+
+    init = json.dumps({"type": "system", "subtype": "init",
+                       "model": "x", "tools": []})
+    result_event = json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "total_cost_usd": 0,
+        "duration_ms": 0,
+        "num_turns": 1,
+        "stop_reason": "end_turn",
+        "result": "CAPTURE: forced classification for test",
+    })
+
+    proc = subprocess.run(
+        ["python3", str(SCRIPT), "--extract-result", str(result_path)],
+        input="\n".join([init, result_event]),
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, f"formatter failed: {proc.stderr}"
+    assert result_path.exists(), "result file not written"
+    assert result_path.read_text() == "CAPTURE: forced classification for test"
+
+
+def test_unknown_tool_use_id_falls_back_to_question_mark():
+    """A tool_result whose tool_use_id was not seen renders with '?' as tool name."""
+    user_event = json.dumps({
+        "type": "user",
+        "message": {
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "toolu_NEVER_SEEN",
+                "content": "orphan result content",
+            }],
+        },
+    })
+    out = feed([user_event])
+    assert "RESULT | ? → orphan result content" in out

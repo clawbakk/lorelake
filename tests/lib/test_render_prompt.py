@@ -162,3 +162,16 @@ def test_ingest_template_renders_with_critical_rules_section():
         assert f"### R{n} —" in out, f"R{n} header missing"
     # No unresolved placeholders should remain.
     assert "{{" not in out, f"unresolved placeholder: {out!r}"
+
+
+def test_fallback_path_not_found_reports_diagnostic(tmp_path):
+    """When a fallback path cannot be read, render fails and prints a diagnostic."""
+    tmpl = tmp_path / "ingest.md.tmpl"
+    write(tmpl, "Examples:\n{{EXAMPLES|fallback:" + str(tmp_path / "does-not-exist.md") + "}}")
+    cfg = tmp_path / "config.json"
+    write(cfg, json.dumps({"prompts": {"ingest": {"EXAMPLES": ""}}}))
+
+    rc, out, err = render(tmpl, cfg)
+    assert rc != 0
+    assert "EXAMPLES" in err
+    assert "fallback read failed" in err
