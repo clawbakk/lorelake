@@ -169,12 +169,100 @@ test_triage_failure_no_session_residue() {
   rm -rf "$proj"
 }
 
+test_worker_claude_invocation_flags() {
+  local proj; proj=$(mkproject)
+  local tr="$proj/transcript.jsonl"; make_fake_transcript "$tr"
+  local record; record=$(mktemp -t llake-claude-args.XXXXXX)
+
+  STUB_STREAM_FILE="$STREAM_DIR/triage-capture.jsonl" STUB_EXIT_CODE=0 \
+    STUB_RECORD_FILE="$record" \
+    run_worker "$proj" "sess-flags" "$tr"
+
+  # Both invocations (triage + capture) must use --tools (not --allowedTools).
+  if ! grep -q -- "--tools" "$record"; then
+    FAIL=$((FAIL+1)); FAILED_NAMES+=("worker-flags:tools-present")
+    echo "  FAIL: --tools missing"; sed 's/^/    /' "$record"
+  else PASS=$((PASS+1)); fi
+
+  if grep -q -- "--allowedTools" "$record"; then
+    FAIL=$((FAIL+1)); FAILED_NAMES+=("worker-flags:allowedTools-absent")
+    echo "  FAIL: --allowedTools still present"; sed 's/^/    /' "$record"
+  else PASS=$((PASS+1)); fi
+
+  # --strict-mcp-config must appear at least twice (once per invocation).
+  local strict_count
+  strict_count=$(grep -c -- "--strict-mcp-config" "$record")
+  if [ "$strict_count" -lt 2 ]; then
+    FAIL=$((FAIL+1)); FAILED_NAMES+=("worker-flags:strict-mcp-twice")
+    echo "  FAIL: --strict-mcp-config appeared $strict_count times (expected >=2)"; sed 's/^/    /' "$record"
+  else PASS=$((PASS+1)); fi
+
+  rm -f "$record"
+  rm -rf "$proj"
+}
+
+test_render_fails_triage() {
+  local proj; proj=$(mkproject)
+  local tr="$proj/transcript.jsonl"; make_fake_transcript "$tr"
+
+  local plugin_shim; plugin_shim=$(mktemp -d -t llake-shim.XXXXXX)
+  cp -R "$REPO_ROOT/hooks" "$plugin_shim/"
+  cp -R "$REPO_ROOT/templates" "$plugin_shim/"
+  echo 'Bad triage prompt: {{DEFINITELY_NOT_WIRED}}' > "$plugin_shim/hooks/prompts/triage.md.tmpl"
+
+  local tmp_input; tmp_input=$(mktemp -t llake-worker-input.XXXXXX)
+  cat > "$tmp_input" <<JSON
+{"cwd":"$proj","session_id":"sess-rfail-triage","transcript_path":"$tr"}
+JSON
+
+  PATH="$STUB_BIN:$PATH" \
+    LLAKE_SESSION_CAPTURE_SYNC=1 \
+    bash "$plugin_shim/hooks/lib/session-capture-worker.sh" "$tmp_input"
+
+  assert_log_grep "rfail-triage:log" "$proj/llake/.state/hooks.log" "render-failed: triage prompt"
+  assert_log_no_grep "rfail-triage:no-capture" "$proj/llake/.state/hooks.log" "completed: agent"
+  assert_log_no_grep "rfail-triage:no-classification" "$proj/llake/.state/hooks.log" "triage CAPTURE"
+
+  rm -rf "$plugin_shim" "$proj"
+}
+
+test_render_fails_capture() {
+  local proj; proj=$(mkproject)
+  local tr="$proj/transcript.jsonl"; make_fake_transcript "$tr"
+
+  local plugin_shim; plugin_shim=$(mktemp -d -t llake-shim.XXXXXX)
+  cp -R "$REPO_ROOT/hooks" "$plugin_shim/"
+  cp -R "$REPO_ROOT/templates" "$plugin_shim/"
+  # Triage template stays valid; capture template gets an unwired placeholder.
+  echo 'Bad capture prompt: {{DEFINITELY_NOT_WIRED}}' > "$plugin_shim/hooks/prompts/capture.md.tmpl"
+
+  local tmp_input; tmp_input=$(mktemp -t llake-worker-input.XXXXXX)
+  cat > "$tmp_input" <<JSON
+{"cwd":"$proj","session_id":"sess-rfail-capture","transcript_path":"$tr"}
+JSON
+
+  PATH="$STUB_BIN:$PATH" \
+    LLAKE_SESSION_CAPTURE_SYNC=1 \
+    STUB_STREAM_FILE="$STREAM_DIR/triage-capture.jsonl" \
+    STUB_EXIT_CODE=0 \
+    bash "$plugin_shim/hooks/lib/session-capture-worker.sh" "$tmp_input"
+
+  assert_log_grep "rfail-capture:triage-ok" "$proj/llake/.state/hooks.log" "triage CAPTURE by"
+  assert_log_grep "rfail-capture:log" "$proj/llake/.state/hooks.log" "render-failed: capture prompt"
+  assert_log_no_grep "rfail-capture:no-completed" "$proj/llake/.state/hooks.log" "completed: agent"
+
+  rm -rf "$plugin_shim" "$proj"
+}
+
 echo "-- triage SKIP";                 test_triage_skip
 echo "-- triage CAPTURE + success";    test_triage_capture_success
 echo "-- triage agent fails";          test_triage_agent_fails
 echo "-- capture agent fails";         test_capture_agent_fails
 echo "-- watchdog timeout (triage)";   test_watchdog_timeout_during_triage
 echo "-- triage failure no residue";   test_triage_failure_no_session_residue
+echo "-- triage render fails";          test_render_fails_triage
+echo "-- capture render fails";         test_render_fails_capture
+echo "-- worker invocation flags";      test_worker_claude_invocation_flags
 
 echo
 echo "Passed: $PASS"
