@@ -240,16 +240,11 @@ EOF
   if [ "$TRIAGE_RENDER_EXIT" -ne 0 ] || [ -z "$TRIAGE_PROMPT" ]; then
     TRIAGE_ERR=$(cat "$TRIAGE_RENDER_ERR" 2>/dev/null)
     rm -f "$TRIAGE_RENDER_ERR"
-    {
-      echo ""
-      echo "=== TRIAGE RENDER FAILED: exit $TRIAGE_RENDER_EXIT at $(date '+%Y-%m-%d %H:%M:%S') ==="
-      [ -n "$TRIAGE_ERR" ] && echo "$TRIAGE_ERR" || echo "(renderer produced empty prompt with exit $TRIAGE_RENDER_EXIT)"
-    } >> "$AGENT_LOG"
+    log_render_failure "TRIAGE" "$TRIAGE_RENDER_EXIT" "$TRIAGE_ERR" "$AGENT_LOG"
     kill "$WATCHDOG_PID" 2>/dev/null
     wait "$WATCHDOG_PID" 2>/dev/null
     rm -rf "$SESSION_DIR"
-    ERR_SUMMARY=$(echo "$TRIAGE_ERR" | head -1 | tr -d '\n' | cut -c1-200)
-    [ -z "$ERR_SUMMARY" ] && ERR_SUMMARY="empty prompt"
+    ERR_SUMMARY=$(render_err_summary "$TRIAGE_ERR")
     printf "%s | %-13s | render-failed: triage prompt (agent %s, exit %s): %s\n" \
       "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" "$TRIAGE_RENDER_EXIT" "$ERR_SUMMARY" >> "$LOG_FILE"
     exit 0
@@ -336,16 +331,11 @@ EOF
   if [ "$CAPTURE_RENDER_EXIT" -ne 0 ] || [ -z "$CAPTURE_PROMPT" ]; then
     CAPTURE_ERR=$(cat "$CAPTURE_RENDER_ERR" 2>/dev/null)
     rm -f "$CAPTURE_RENDER_ERR"
-    {
-      echo ""
-      echo "=== CAPTURE RENDER FAILED: exit $CAPTURE_RENDER_EXIT at $(date '+%Y-%m-%d %H:%M:%S') ==="
-      [ -n "$CAPTURE_ERR" ] && echo "$CAPTURE_ERR" || echo "(renderer produced empty prompt with exit $CAPTURE_RENDER_EXIT)"
-    } >> "$AGENT_LOG"
+    log_render_failure "CAPTURE" "$CAPTURE_RENDER_EXIT" "$CAPTURE_ERR" "$AGENT_LOG"
     kill "$WATCHDOG_PID" 2>/dev/null
     wait "$WATCHDOG_PID" 2>/dev/null
     rm -rf "$SESSION_DIR"
-    ERR_SUMMARY=$(echo "$CAPTURE_ERR" | head -1 | tr -d '\n' | cut -c1-200)
-    [ -z "$ERR_SUMMARY" ] && ERR_SUMMARY="empty prompt"
+    ERR_SUMMARY=$(render_err_summary "$CAPTURE_ERR")
     printf "%s | %-13s | render-failed: capture prompt (agent %s, exit %s): %s\n" \
       "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" "$CAPTURE_RENDER_EXIT" "$ERR_SUMMARY" >> "$LOG_FILE"
     exit 0
