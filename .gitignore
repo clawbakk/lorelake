@@ -10,3 +10,4 @@ venv/
 docs/
 !docs/INSTALL.md
 llake/.state/
+.context/

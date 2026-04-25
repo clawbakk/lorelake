@@ -12,7 +12,8 @@ from datetime import datetime
 
 
 def truncate(text, max_len=500):
-    if not text or len(text) <= max_len:
+    text = text or ""
+    if len(text) <= max_len:
         return text
     return text[:max_len] + f"... [{len(text) - max_len} chars truncated]"
 
@@ -55,11 +56,6 @@ _RESULT_CAPS = {
     "Glob": 1000,
     "Grep": 2000,
 }
-
-
-def result_truncation_cap(tool_name):
-    """Per-tool cap for tool-result content in the log. Default 1000."""
-    return _RESULT_CAPS.get(tool_name, 1000)
 
 
 def main():
@@ -171,7 +167,7 @@ def main():
                     content_text = str(raw_content)
 
                 prefix = "ERROR" if is_error else "RESULT"
-                cap = result_truncation_cap(tool_name)
+                cap = _RESULT_CAPS.get(tool_name, 1000)
                 print(f"[{ts}] {prefix} | {tool_name} → {truncate(content_text, cap)}")
             sys.stdout.flush()
 
@@ -202,8 +198,8 @@ def main():
                     try:
                         with open(args.extract_result_path, 'w') as f:
                             f.write(result_text)
-                    except IOError:
-                        pass
+                    except IOError as exc:
+                        print(f"format-agent-log: cannot write result to {args.extract_result_path}: {exc}", file=sys.stderr)
 
             sys.stdout.flush()
 

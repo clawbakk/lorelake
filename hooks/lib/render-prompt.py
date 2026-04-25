@@ -89,8 +89,8 @@ def main():
                 resolved = Path(args.templates_dir) / fallback_path
             try:
                 return resolved.read_text()
-            except (IOError, OSError):
-                pass
+            except (IOError, OSError) as exc:
+                print(f"render-prompt: fallback read failed ({resolved}): {exc}", file=sys.stderr)
 
         unresolved.add(name)
         return match.group(0)

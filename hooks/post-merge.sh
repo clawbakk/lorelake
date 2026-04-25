@@ -303,7 +303,7 @@ if [ "${LLAKE_POST_MERGE_SYNC:-}" = "1" ]; then
   # can assert on the final state of hooks.log, agent.log, and SHA_FILE.
   wait "$BG_PID" 2>/dev/null
 else
-  disown
+  disown "$BG_PID"
 fi
 
 hook_end "done: spawned agent $AGENT_ID (commits: $COMMIT_RANGE, timeout: ${MAX_TIMEOUT_SEC}s)" "$LOG_FILE"

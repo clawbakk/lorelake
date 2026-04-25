@@ -263,10 +263,19 @@ EOF
   CURRENT_PID_FILE="$AGENT_DIR/triage.pid"
   echo "$MY_PID" > "$CURRENT_PID_FILE"
 
+  # Triage runs as a SYNCHRONOUS foreground pipeline (no `&`), so
+  # `${PIPESTATUS[0]}` on the next line correctly captures claude's exit
+  # code. The capture phase below uses a backgrounded inner subshell —
+  # `( ... exit ${PIPESTATUS[0]} ) & wait $CLAUDE_PID` — because there
+  # `wait` would otherwise return the formatter's exit code. Do NOT
+  # "unify" the patterns: the asymmetry is intentional. If USR1 arrives
+  # mid-pipeline, the trap in agent-run.sh `exit 143`s the outer subshell
+  # before L277 is evaluated, so TRIAGE_EXIT is never read in that path.
   IS_LLAKE_AGENT=true LLAKE_AGENT_ID="$TRIAGE_AGENT_ID" \
     claude --model "$TRIAGE_MODEL" --effort "$TRIAGE_EFFORT" \
     -p "$TRIAGE_PROMPT" \
-    --allowedTools "Read" \
+    --tools "Read" \
+    --strict-mcp-config \
     --max-budget-usd 0.50 \
     --output-format stream-json --verbose 2>&1 \
     | python3 "$FORMATTER" --extract-result "$TRIAGE_RESULT_FILE" >> "$AGENT_LOG"
@@ -357,7 +366,8 @@ EOF
     IS_LLAKE_AGENT=true LLAKE_AGENT_ID="$CAPTURE_AGENT_ID" \
       claude --model "$CAPTURE_MODEL" --effort "$CAPTURE_EFFORT" \
       -p "$CAPTURE_PROMPT" \
-      --allowedTools "$ALLOWED_TOOLS" \
+      --tools "$ALLOWED_TOOLS" \
+      --strict-mcp-config \
       --max-budget-usd "$MAX_BUDGET_USD" \
       --output-format stream-json --verbose 2>&1 \
       | python3 "$FORMATTER" >> "$AGENT_LOG"
@@ -401,7 +411,7 @@ BG_PID=$!
 if [ "${LLAKE_SESSION_CAPTURE_SYNC:-}" = "1" ]; then
   wait "$BG_PID" 2>/dev/null
 else
-  disown
+  disown "$BG_PID"
 fi
 
 hook_end "done: spawned agent $AGENT_ID (session: $SESSION_ID, turns: $TURN_COUNT, timeout: ${MAX_TIMEOUT_SEC}s)" "$LOG_FILE"
