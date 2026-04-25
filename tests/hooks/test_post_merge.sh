@@ -237,11 +237,22 @@ test_claude_invocation_flags() {
     PASS=$((PASS+1))
   fi
 
-  # --allowedTools must NOT be present (replaced by --tools).
-  if grep -q -- "--allowedTools" "$record"; then
+  # --allowedTools must ALSO be present and match --tools. --tools restricts
+  # the available surface; --allowedTools auto-approves those tools so they
+  # don't trigger the permission prompt in headless -p mode.
+  if ! grep -q -- "--allowedTools" "$record"; then
     FAIL=$((FAIL+1))
-    FAILED_NAMES+=("flags:allowedTools-absent")
-    echo "  FAIL [flags:allowedTools-absent]: --allowedTools still used"
+    FAILED_NAMES+=("flags:allowedTools-present")
+    echo "  FAIL [flags:allowedTools-present]: --allowedTools missing"
+    sed 's/^/    /' "$record"
+  else
+    PASS=$((PASS+1))
+  fi
+
+  if ! grep -qE -- "--allowedTools[[:space:]]+['\"]?Read,Write" "$record"; then
+    FAIL=$((FAIL+1))
+    FAILED_NAMES+=("flags:allowedTools-value")
+    echo "  FAIL [flags:allowedTools-value]: --allowedTools value missing expected Read,Write"
     sed 's/^/    /' "$record"
   else
     PASS=$((PASS+1))

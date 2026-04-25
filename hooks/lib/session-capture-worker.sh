@@ -270,6 +270,7 @@ EOF
     claude --model "$TRIAGE_MODEL" --effort "$TRIAGE_EFFORT" \
     -p "$TRIAGE_PROMPT" \
     --tools "Read" \
+    --allowedTools "Read" \
     --strict-mcp-config \
     --max-budget-usd 0.50 \
     --output-format stream-json --verbose 2>&1 \
@@ -362,6 +363,7 @@ EOF
       claude --model "$CAPTURE_MODEL" --effort "$CAPTURE_EFFORT" \
       -p "$CAPTURE_PROMPT" \
       --tools "$ALLOWED_TOOLS" \
+      --allowedTools "$ALLOWED_TOOLS" \
       --strict-mcp-config \
       --max-budget-usd "$MAX_BUDGET_USD" \
       --output-format stream-json --verbose 2>&1 \

@@ -246,6 +246,7 @@ rm -f "$RENDER_STDERR_FILE"
   (
     claude $MODEL_FLAG $EFFORT_FLAG -p "$INGEST_PROMPT" \
     --tools "$ALLOWED_TOOLS" \
+    --allowedTools "$ALLOWED_TOOLS" \
     --strict-mcp-config \
     --max-budget-usd "$MAX_BUDGET_USD" \
     --output-format stream-json --verbose 2>&1 \

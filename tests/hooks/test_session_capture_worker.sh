@@ -178,15 +178,22 @@ test_worker_claude_invocation_flags() {
     STUB_RECORD_FILE="$record" \
     run_worker "$proj" "sess-flags" "$tr"
 
-  # Both invocations (triage + capture) must use --tools (not --allowedTools).
-  if ! grep -q -- "--tools" "$record"; then
-    FAIL=$((FAIL+1)); FAILED_NAMES+=("worker-flags:tools-present")
-    echo "  FAIL: --tools missing"; sed 's/^/    /' "$record"
+  # Both invocations (triage + capture) must pair --tools with --allowedTools.
+  # --tools restricts the available surface; --allowedTools auto-approves
+  # those tools so they don't trigger the permission prompt in headless -p
+  # mode. Each must appear at least twice (once per invocation).
+  local tools_count
+  tools_count=$(grep -c -- "--tools" "$record")
+  if [ "$tools_count" -lt 2 ]; then
+    FAIL=$((FAIL+1)); FAILED_NAMES+=("worker-flags:tools-twice")
+    echo "  FAIL: --tools appeared $tools_count times (expected >=2)"; sed 's/^/    /' "$record"
   else PASS=$((PASS+1)); fi
 
-  if grep -q -- "--allowedTools" "$record"; then
-    FAIL=$((FAIL+1)); FAILED_NAMES+=("worker-flags:allowedTools-absent")
-    echo "  FAIL: --allowedTools still present"; sed 's/^/    /' "$record"
+  local allowed_count
+  allowed_count=$(grep -c -- "--allowedTools" "$record")
+  if [ "$allowed_count" -lt 2 ]; then
+    FAIL=$((FAIL+1)); FAILED_NAMES+=("worker-flags:allowedTools-twice")
+    echo "  FAIL: --allowedTools appeared $allowed_count times (expected >=2)"; sed 's/^/    /' "$record"
   else PASS=$((PASS+1)); fi
 
   # --strict-mcp-config must appear at least twice (once per invocation).
