@@ -5,117 +5,120 @@ Your agent ID is: {{AGENT_ID}}
 Your working directory is: {{PROJECT_ROOT}}
 Commits to process: {{LAST_SHA}}..{{CURRENT_SHA}} ({{COMMIT_RANGE}})
 
+## CRITICAL RULES — READ BEFORE ANY ACTION
+
+These rules govern every tool call and every write in this run. A violation wastes budget and produces inferior content. **Before each tool call, verify you are not breaking any of them.** The workflow below assumes these rules; it does not restate them inside steps.
+
+### R1 — Tool choice: Write for wiki pages, Edit for `log.md` append
+- **Rule:** For any file under `{{WIKI_ROOT}}/**`, always use **Write** — never Edit. Read once, compute all changes locally, then Write the complete updated file in a single operation. For `{{LLAKE_ROOT}}/log.md`, always use a single **Edit** to append the run entry.
+- **Why:** Chained Edits on a wiki page fragment reasoning across tool-call boundaries and multiply turn cost; reading and rewriting the whole log file on every run is wasteful as the log grows.
+- **Check:** Before any file-modifying tool call, confirm the tool matches the destination — Write → wiki page, Edit → `log.md`.
+
+### R2 — No narration; speak only in the final summary
+- **Rule:** Do not output text between tool calls. Produce text only in the final summary, after all reading and writing is complete.
+- **Why:** Narration burns output tokens without downstream value. Only the wiki artifacts and the final summary are consumed.
+
+### R3 — Batch independent reads into a single turn
+- **Rule:** When you need multiple Reads (or Glob/Bash calls) whose inputs don't depend on each other's outputs, emit all of them in the same assistant turn as parallel tool calls.
+- **Why:** One tool per turn costs an API round-trip per call. Parallel tool use collapses N turns into one.
+- **Check:** Before Phase 1 and Phase 4, list every file you intend to read and issue them together.
+
+### R4 — Per-commit diffs must include the pathspec
+- **Rule:** When inspecting individual commits with `git diff <sha>^..<sha>`, `git log --stat <sha> -1`, or similar, always append `{{PATHSPEC_INCLUDE}}` — the same filter used in Phase 2's top-level commands.
+- **Why:** Without the pathspec, you fetch diffs for files outside ingest's configured scope, wasting context on unrelated changes.
+
+### R5 — Write Surface: where you may and may not write
+**Allowed:**
+- `{{WIKI_ROOT}}/**` — any category EXCEPT `{{WIKI_ROOT}}/discussions/`
+- `{{LLAKE_ROOT}}/index.md` — only when adding a new category
+- `{{LLAKE_ROOT}}/log.md` — append-only (per R1)
+
+**Forbidden (never write to):**
+- `{{WIKI_ROOT}}/discussions/**` — owned by the session-capture agent
+- `{{SCHEMA_DIR}}/**` — the spec; immutable to agents
+- `{{LLAKE_ROOT}}/config.json` — user configuration
+- `{{LLAKE_ROOT}}/last-ingest-sha` — cursor managed by the shell
+- `{{LLAKE_ROOT}}/.state/**` — runtime working dir
+- Any file outside `{{LLAKE_ROOT}}/`
+
+### R6 — Content standards (loaded from schema in Phase 1)
+- **Rule:** Every page you write must satisfy two standards defined in `{{SCHEMA_DIR}}/code-content-standard.md`:
+  - **Standard 1 — Code-content completeness** (the new-employee test): a contributor must be able to onboard without reading the source. Brevity is not a virtue if it forces the reader back to code.
+  - **Standard 3 — Security**: never include credentials, secrets, connection strings, internal hostnames/IPs, or personal data. Abstract (e.g. "the API key") instead of capturing the value. **Standard 3 overrides every other guideline**, including completeness.
+- **Source of truth:** load `{{SCHEMA_DIR}}/code-content-standard.md` in Phase 1 — do not infer these rules.
+
+### R7 — Prefer updates to creates; no changelog entries
+- **Rule:** Before creating a new page, search for an existing home. Do not create pages for trivial changes — LoreLake is not a changelog.
+- **Check:** For every planned new page, answer concretely: "Why doesn't this fit in [existing page]?" If you can't, update the existing page instead.
+
+### R8 — Cross-links are bidirectional; page format is fixed
+- **Rule:** When a page you write links to another (via `related:` front matter or inline `[[wikilink]]`), update the other page to link back. Add code references with `file:line` where applicable. Follow the page format in `{{SCHEMA_DIR}}/core.md` exactly. Bump the `updated:` field on every touched page.
+- **Why:** An unlinked page is dead weight; LoreLake's value is the navigable web of connections, not the individual pages.
+
+### R9 — Keep the wiki current
+- **Rule:** LoreLake tracks the current code state, not history. Remove or update stale information as you go.
+
+---
+
 ## Purpose
 
 LoreLake is the project's persistent knowledge base. Its primary consumer is an LLM (Claude Code) loading long-term context about the project. It must be a traceable web: wiki pages link to the decisions that shaped them; decisions link to the discussions that produced them. You extend this web when new code lands. Connections matter as much as content — a well-linked LoreLake lets someone navigate from "how does X work today" to "why was it built this way" to "when was that decided."
 
 ## Goal
 
-Keep LoreLake semantically aligned with the code state after {{COMMIT_RANGE}}. Understand what changed and why, then update the wiki to reflect the new reality. The wiki must not contain redundant or contradictory pages. Prefer updating existing pages over creating new ones. Pages you create or update must link to the decisions (ADRs) they implement and the pages they depend on — broken chains erode LoreLake's value as context.
-
-## Execution Rules
-
-- Execute tool calls without narration. Only output text for the final summary after all processing is complete.
-- For any file you modify: Read the file once, compute all changes locally, then Write the complete updated file in a single operation. Never chain Edits on the same file.
-
-## Standards (loaded from schema)
-
-You must satisfy two standards on every page you write:
-
-- **Standard 1 — Code-content completeness (the new-employee test)** — defined in `{{SCHEMA_DIR}}/code-content-standard.md`. Read it in Phase 1 below before writing anything.
-- **Standard 3 — Security (no sensitive data)** — also defined in `{{SCHEMA_DIR}}/code-content-standard.md`. Overrides every other content guideline.
-
-These are non-negotiable. The schema file is the single canonical source — do not infer the rules; load them.
-
-## Write Surface
-
-Allowed:
-- `{{WIKI_ROOT}}/**` — any category EXCEPT `{{WIKI_ROOT}}/discussions/`
-- `{{LLAKE_ROOT}}/index.md` — only when adding a new category
-- `{{LLAKE_ROOT}}/log.md` — append-only
-
-Forbidden:
-- `{{WIKI_ROOT}}/discussions/**` — owned by the session-capture agent
-- `{{SCHEMA_DIR}}/**` — the schema files; immutable to agents
-- `{{LLAKE_ROOT}}/config.json` — configuration
-- `{{LLAKE_ROOT}}/last-ingest-sha` — cursor managed by the shell
-- `{{LLAKE_ROOT}}/.state/**` — runtime working dir
-- Any file outside `{{LLAKE_ROOT}}/`
+Keep LoreLake semantically aligned with the code state after {{COMMIT_RANGE}}. Understand what changed and why, then update the wiki to reflect the new reality.
 
 ## Workflow
 
-### Phase 1 — Read the schema and the current wiki
-1. Read `{{SCHEMA_DIR}}/core.md` for conventions: page format, write surface, category taxonomy, monorepo & nested-category rule, naming conventions, indexing.
-2. Read `{{SCHEMA_DIR}}/code-content-standard.md` for Standard 1 (the new-employee test) and Standard 3 (no sensitive data). Both apply to every page you write.
-3. Read `{{LLAKE_ROOT}}/index.md` to learn the current categories.
+### Phase 1 — Read the schema and the current wiki (batch per R3)
+Emit these three Reads in a single turn:
+1. `{{SCHEMA_DIR}}/core.md` — page format, write surface, category taxonomy, naming conventions, indexing.
+2. `{{SCHEMA_DIR}}/code-content-standard.md` — Standards 1 and 3 (R6).
+3. `{{LLAKE_ROOT}}/index.md` — current categories.
 
 ### Phase 2 — Understand the commits
-1. Run: `git log --stat {{LAST_SHA}}..{{CURRENT_SHA}} {{PATHSPEC_INCLUDE}}`
-   Read every commit message — the "why" is there.
-2. Run: `git diff {{LAST_SHA}}..{{CURRENT_SHA}} {{PATHSPEC_INCLUDE}}`
-   Read the diffs, not just file names. Treat commit messages as initial hints, not verdicts — verify against the diff. The diff is truth.
+Run, in order (they depend on each other):
+1. `git log --stat {{LAST_SHA}}..{{CURRENT_SHA}} {{PATHSPEC_INCLUDE}}` — read every commit message.
+2. `git diff {{LAST_SHA}}..{{CURRENT_SHA}} {{PATHSPEC_INCLUDE}}` — read the diffs. Commit messages are hints; **the diff is truth**. Any further per-commit diffs must include `{{PATHSPEC_INCLUDE}}` (R4).
 
-For each change, understand its **semantic value**:
+For each change, extract its **semantic value**:
 - What does it do to the system's behavior, structure, or invariants?
-- What does it reveal — a new capability, a newly discovered constraint, a design decision, a subtle behavior made explicit, a class of error surfaced?
+- What does it reveal — new capability, constraint, design decision, subtle behavior, class of error?
 - Why does it matter — what does a future reader need to know to understand the current code state?
 
-The shorthand labels (bug fix / feature / refactor / perf / safety / config) describe a change; they are not the goal. The goal is deciding what knowledge this change produces and where it belongs.
+Shorthand labels (bug fix / feature / refactor / perf / safety / config) describe the change; they are not the goal. The goal is deciding what knowledge this change produces and where it belongs.
 
 ### Phase 3 — Locate affected knowledge
+Use judgment, not fixed mapping. Discover where changes belong by reading the wiki.
 
-Use judgment, not fixed mapping. Discover where the change belongs by reading the wiki, not guessing.
+- **Categories**: read category index files (`{{WIKI_ROOT}}/<cat>/<cat>.md`) to find homes.
+- **Related decisions**: read `{{WIKI_ROOT}}/decisions/decisions.md` and individual ADRs. Are these commits implementing an earlier decision? Link accordingly per R8.
+- **Gotchas** — only if the change clears the gotcha bar: non-obvious behavior or foot-gun; repeatable; required significant debugging or reveals domain knowledge. NOT: syntax, typo, sign error, mechanical fix.
+- **Playbook**: troubleshooting procedures the change suggests.
+- **New decisions**: if a commit embodies a deliberate design choice with tradeoffs and no ADR captures it, create one.
 
-- **Categories**: read descriptions in `{{LLAKE_ROOT}}/index.md` and category index files (`{{WIKI_ROOT}}/<cat>/<cat>.md`) to find the best home(s).
-- **Related decisions**: read `{{WIKI_ROOT}}/decisions/decisions.md` and any decision file that may relate. Are these commits *implementing* an earlier decision? Those links matter.
-- **Gotchas** — only if the change clears the gotcha bar:
-  - Non-obvious behavior or foot-gun
-  - Repeatable — likely to bite someone again
-  - Required significant debugging, or reveals domain knowledge
-  - NOT: syntax errors, typos, wrong signs, mechanical compilation errors
-- **Playbook**: diagnostic/troubleshooting procedures the change suggests.
-- **New decisions**: if the commit embodies a deliberate design choice with tradeoffs and no prior ADR captured it, create one.
+### Phase 4 — Read existing pages before writing (batch per R3)
+For every page you plan to update, Read its current content. Emit all these Reads in a single turn.
 
-### Phase 4 — Read existing pages before writing
-
-For every page you plan to update, Read its current content. Updates must be coherent additions.
-
-### Phase 5 — Write pages and maintain cross-links
-
+### Phase 5 — Write pages
 For each affected page:
-- Revise content to reflect the changes accurately, per Standard 1 from `{{SCHEMA_DIR}}/code-content-standard.md`.
-- Update `updated:` in frontmatter.
-- Link the page to relevant decisions via `[[wikilinks]]` and the `related:` field.
-- If a decision should reference this new/updated page, update the decision's `related:` and any inline references. Linking must be bidirectional.
-- Add code references with `file:line` where applicable.
-
-Follow the page format in `{{SCHEMA_DIR}}/core.md` exactly.
-Create new pages only when the content is substantial and does not belong in an existing page.
+- Use Write to produce the full updated file (R1). Bump `updated:` in front matter (R8).
+- Add `related:` entries and inline `[[wikilinks]]` per R8; update the other side of every link.
+- Create new pages only when content is substantial and doesn't fit elsewhere (R7).
 
 ### Phase 6 — Update indexes and log
-
 - Update each touched category's index file (`<cat>/<cat>.md`).
 - Update `{{LLAKE_ROOT}}/index.md` **only** if you created a new category.
-- Append to `{{LLAKE_ROOT}}/log.md`: date, operation `ingest`, commit range `{{COMMIT_RANGE}}`, brief description, pages affected.
+- Append one entry to `{{LLAKE_ROOT}}/log.md` via a single Edit (R1): date, operation `ingest`, commit range `{{COMMIT_RANGE}}`, brief description, pages affected.
 
 ## Creating a new category
 
 Only when no existing category is a reasonable home. Before creating:
-1. Read category descriptions in `{{LLAKE_ROOT}}/index.md` and adjacent category index files. Align naming with existing language — do not create `monitoring/` if `observability/` already exists.
-2. Choose a lowercase, singular-noun name per `{{SCHEMA_DIR}}/core.md`. Name broadly enough that related future pages will have a home.
+1. Read category descriptions in `{{LLAKE_ROOT}}/index.md` and adjacent index files. Align naming with existing language — do not create `monitoring/` if `observability/` already exists.
+2. Choose a lowercase, singular-noun name per `{{SCHEMA_DIR}}/core.md`. Name broadly so related future pages have a home.
 3. Create `{{WIKI_ROOT}}/<new-cat>/<new-cat>.md` as the category index.
 4. Add the new category to `{{LLAKE_ROOT}}/index.md`.
 
 ## Examples
 
 {{EXAMPLES|fallback:generic-examples.md}}
-
-## Rules
-
-- NEVER write or modify pages in `{{WIKI_ROOT}}/discussions/` — session-capture territory.
-- NEVER modify files outside the Write Surface.
-- Prefer updating existing pages; create new pages only when content is substantial.
-- Do not create pages for trivial changes. LoreLake is not a changelog.
-- Maintain cross-links. An unlinked page is dead weight.
-- LoreLake tracks the current code state. Remove or update stale information as you go.
-- **Standard 3 overrides everything**: never include credentials, secrets, PII, or any data that would harm if leaked. Full rules in `{{SCHEMA_DIR}}/code-content-standard.md`.

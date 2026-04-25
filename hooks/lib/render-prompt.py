@@ -10,7 +10,21 @@ Usage:
   render-prompt.py <template-path> <config-json-path> [VAR=value ...]
 
 Output: rendered prompt to stdout.
-Exits nonzero if any unresolved {{VAR}} or {{VAR|fallback:...}} remains.
+Exits nonzero if any TEMPLATE placeholder is unresolved.
+
+Substitution model — important:
+  Resolution is single-pass. PLACEHOLDER_RE.sub scans the template only,
+  not the rendered output. Therefore a custom slot value that itself
+  contains '{{NAME}}' text is preserved verbatim — it is treated as
+  literal content, not as a second-pass placeholder. This is intentional:
+  documentation and prompt examples often mention placeholder syntax,
+  and second-pass substitution would corrupt them. The contract:
+
+    - Strict: every placeholder appearing in the TEMPLATE must resolve.
+    - Lenient: '{{...}}' text inside a SLOT VALUE is literal content.
+
+  Pinned by tests/lib/test_render_prompt.py::
+    test_literal_braces_in_slot_value_are_preserved
 """
 import argparse
 import json
@@ -71,6 +85,8 @@ def main():
     custom_slots = (config.get("prompts", {}) or {}).get(section_name, {}) or {}
     runtime_vars = parse_runtime_vars(args.vars)
 
+    unresolved = set()
+
     def resolve(match):
         name = match.group(1)
         fallback_path = match.group(2)
@@ -87,17 +103,17 @@ def main():
                 resolved = Path(args.templates_dir) / fallback_path
             try:
                 return resolved.read_text()
-            except (IOError, OSError):
-                pass
+            except (IOError, OSError) as exc:
+                print(f"render-prompt: fallback read failed ({resolved}): {exc}", file=sys.stderr)
 
+        unresolved.add(name)
         return match.group(0)
 
     rendered = PLACEHOLDER_RE.sub(resolve, template)
 
-    leftovers = PLACEHOLDER_RE.findall(rendered)
-    if leftovers:
-        unresolved = sorted({m[0] for m in leftovers})
-        print(f"render-prompt: unresolved placeholders: {', '.join(unresolved)}", file=sys.stderr)
+    if unresolved:
+        names = ", ".join(sorted(unresolved))
+        print(f"render-prompt: unresolved placeholders: {names}", file=sys.stderr)
         sys.exit(1)
 
     sys.stdout.write(rendered)

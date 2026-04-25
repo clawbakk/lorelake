@@ -72,3 +72,47 @@ if [ "$COUNT" -ne 1 ]; then
 fi
 
 echo "PASS: session-end foreground"
+
+# ----- recursion-guard scenario -----
+PROJ2="$TMP/proj2"
+mkdir -p "$PROJ2/llake/.state"
+echo '{"_schemaVersion":1,"sessionCapture":{"enabled":true},"logging":{"maxLines":1000,"rotateKeepLines":500}}' > "$PROJ2/llake/config.json"
+
+SHIM_LIB2="$TMP/shim-lib2"
+mkdir -p "$SHIM_LIB2"
+for f in "$LIB_DIR"/*.sh "$LIB_DIR"/*.py; do
+  ln -s "$f" "$SHIM_LIB2/$(basename "$f")"
+done
+rm -f "$SHIM_LIB2/session-capture-worker.sh"
+cat > "$SHIM_LIB2/session-capture-worker.sh" <<EOF
+#!/bin/bash
+echo "GUARD-VIOLATION: \$1" > "$TMP/guard-was-violated"
+EOF
+chmod +x "$SHIM_LIB2/session-capture-worker.sh"
+
+cd "$PROJ2"
+echo '{"cwd":"'"$PROJ2"'","session_id":"GUARD","transcript_path":""}' \
+  | LLAKE_LIB_DIR_OVERRIDE="$SHIM_LIB2" IS_LLAKE_AGENT=true LLAKE_AGENT_ID=test-guard-id \
+    "$HOOKS_DIR/session-end.sh"
+
+# Worker must NOT have been invoked.
+sleep 1
+if [ -f "$TMP/guard-was-violated" ]; then
+  echo "FAIL: worker was invoked under recursion guard"
+  cat "$TMP/guard-was-violated"
+  exit 1
+fi
+
+LOG2="$PROJ2/llake/.state/hooks.log"
+if ! grep -q 'recursion guard' "$LOG2"; then
+  echo "FAIL: hooks.log missing 'recursion guard' line"
+  cat "$LOG2"
+  exit 1
+fi
+if ! grep -q 'test-guard-id' "$LOG2"; then
+  echo "FAIL: hooks.log missing agent id 'test-guard-id'"
+  cat "$LOG2"
+  exit 1
+fi
+
+echo "PASS: session-end recursion guard"

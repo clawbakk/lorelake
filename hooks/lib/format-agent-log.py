@@ -8,12 +8,13 @@ text, cost/usage summary, and errors.
 import argparse
 import json
 import sys
-import textwrap
+import traceback
 from datetime import datetime
 
 
 def truncate(text, max_len=500):
-    if not text or len(text) <= max_len:
+    text = text or ""
+    if len(text) <= max_len:
         return text
     return text[:max_len] + f"... [{len(text) - max_len} chars truncated]"
 
@@ -28,11 +29,14 @@ def format_tool_input(tool_name, tool_input):
     elif tool_name == "Write":
         path = tool_input.get("file_path", "?")
         content = tool_input.get("content", "")
-        return f"{path} ({len(content)} chars)"
+        preview = truncate(content, 2000)
+        total_marker = f" [{len(content)} chars total]" if len(content) > 2000 else ""
+        return f"{path} ({len(content)} chars), content: {preview!r}{total_marker}"
     elif tool_name == "Edit":
         path = tool_input.get("file_path", "?")
-        old = truncate(tool_input.get("old_string", ""), 80)
-        return f"{path} | old: {old!r}"
+        old = truncate(tool_input.get("old_string", ""), 500)
+        new = truncate(tool_input.get("new_string", ""), 500)
+        return f"{path} | old: {old!r} | new: {new!r}"
     elif tool_name == "Glob":
         return tool_input.get("pattern", "?")
     elif tool_name == "Grep":
@@ -40,22 +44,174 @@ def format_tool_input(tool_name, tool_input):
         path = tool_input.get("path", ".")
         return f"{pattern!r} in {path}"
     elif tool_name == "Bash":
-        return truncate(tool_input.get("command", "?"), 200)
+        return truncate(tool_input.get("command", "?"), 500)
     else:
         return truncate(json.dumps(tool_input, ensure_ascii=False), 200)
+
+
+_RESULT_CAPS = {
+    "Read": 500,
+    "Bash": 2000,
+    "Write": 500,
+    "Edit": 500,
+    "Glob": 1000,
+    "Grep": 2000,
+}
+
+
+def _dispatch_event(event, event_type, subtype, ts,
+                    tool_id_to_name, prev_usage_ref,
+                    turn_ref, last_assistant_text_ref,
+                    args):
+    """Dispatch a single parsed stream-json event to its handler.
+
+    Mutable refs are single-element lists — cheap mutation across the
+    main loop without globals. Any unexpected event shape will raise;
+    main() catches and logs."""
+
+    # --- Init ---
+    if event_type == "system" and subtype == "init":
+        model = event.get("model", "?")
+        tools = event.get("tools", [])
+        print(f"[{ts}] INIT | model={model} tools={','.join(tools)}")
+        sys.stdout.flush()
+        return
+
+    # --- Assistant message (text + tool_use) ---
+    if event_type == "assistant":
+        msg = event.get("message", {})
+        content_blocks = msg.get("content", [])
+        usage = msg.get("usage", {})
+
+        in_tok = usage.get("input_tokens", 0)
+        out_tok = usage.get("output_tokens", 0)
+        cache_read = usage.get("cache_read_input_tokens", 0)
+        cache_create = usage.get("cache_creation_input_tokens", 0)
+        current_usage = (in_tok, out_tok, cache_read, cache_create)
+
+        if current_usage != prev_usage_ref[0]:
+            turn_ref[0] += 1
+            prev_usage_ref[0] = current_usage
+            print(f"\n[{ts}] === TURN {turn_ref[0]} === (in={in_tok} out={out_tok} cache_read={cache_read} cache_create={cache_create})")
+        else:
+            print(f"           ---")
+
+        for block in content_blocks:
+            block_type = block.get("type", "")
+
+            if block_type == "text":
+                text = block.get("text", "").strip()
+                if text:
+                    wrapped = truncate(text, 1000)
+                    print(f"[{ts}] TEXT | {wrapped}")
+                    last_assistant_text_ref[0] = text
+
+            elif block_type == "tool_use":
+                name = block.get("name", "?")
+                tool_input = block.get("input", {})
+                tool_id = block.get("id", "?")
+                tool_id_to_name[tool_id] = name
+                summary = format_tool_input(name, tool_input)
+                print(f"[{ts}] CALL | {name}({summary})")
+
+            elif block_type == "thinking":
+                thinking = block.get("thinking", "").strip()
+                if thinking:
+                    print(f"[{ts}] THINK | {truncate(thinking, 500)}")
+
+        sys.stdout.flush()
+        return
+
+    # --- Tool result (wrapped inside a user message) ---
+    if event_type == "user":
+        msg = event.get("message", {})
+        content_blocks = msg.get("content", [])
+        if not isinstance(content_blocks, list):
+            return
+
+        for block in content_blocks:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+
+            tool_id = block.get("tool_use_id", "")
+            tool_name = tool_id_to_name.get(tool_id, "?")
+            is_error = block.get("is_error", False)
+            raw_content = block.get("content", "")
+
+            if isinstance(raw_content, list):
+                parts = []
+                for part in raw_content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        parts.append(part.get("text", ""))
+                    elif isinstance(part, str):
+                        parts.append(part)
+                content_text = "\n".join(parts)
+            elif isinstance(raw_content, str):
+                content_text = raw_content
+            else:
+                content_text = str(raw_content)
+
+            prefix = "ERROR" if is_error else "RESULT"
+            cap = _RESULT_CAPS.get(tool_name, 1000)
+            print(f"[{ts}] {prefix} | {tool_name} → {truncate(content_text, cap)}")
+        sys.stdout.flush()
+        return
+
+    # --- Final result ---
+    if event_type == "result":
+        cost = event.get("total_cost_usd", 0)
+        duration = event.get("duration_ms", 0)
+        num_turns = event.get("num_turns", 0)
+        stop_reason = event.get("stop_reason", "?")
+        is_error = event.get("is_error", False)
+        errors = event.get("errors", [])
+
+        model_usage = event.get("modelUsage", {})
+        for model, stats in model_usage.items():
+            print(f"\n[{ts}] USAGE | model={model} in={stats.get('inputTokens', 0)} out={stats.get('outputTokens', 0)} "
+                  f"cache_read={stats.get('cacheReadInputTokens', 0)} cache_create={stats.get('cacheCreationInputTokens', 0)}")
+
+        status = "ERROR" if is_error else "DONE"
+        print(f"[{ts}] {status} | turns={num_turns} cost=${cost:.4f} duration={duration / 1000:.1f}s stop={stop_reason}")
+
+        if errors:
+            for err in errors:
+                print(f"[{ts}] ERROR | {err}")
+
+        if args.extract_result_path:
+            result_text = event.get("result", "") or last_assistant_text_ref[0]
+            if result_text:
+                try:
+                    with open(args.extract_result_path, 'w') as f:
+                        f.write(result_text)
+                except IOError as exc:
+                    print(f"format-agent-log: cannot write result to {args.extract_result_path}: {exc}", file=sys.stderr)
+
+        sys.stdout.flush()
+        return
+
+    # --- Hook events ---
+    if event_type == "system" and subtype in ("hook_started", "hook_response"):
+        hook_name = event.get("hook_name", "?")
+        if subtype == "hook_started":
+            print(f"[{ts}] HOOK | {hook_name} started")
+        else:
+            outcome = event.get("outcome", "?")
+            print(f"[{ts}] HOOK | {hook_name} → {outcome}")
+        sys.stdout.flush()
+        return
 
 
 def main():
     parser = argparse.ArgumentParser(description="Format Claude stream-json into readable agent log")
     parser.add_argument('--extract-result', dest='extract_result_path', default=None,
                         help='Write the agent result text to this file path')
-    parser.add_argument('--allowed-tools', dest='allowed_tools', default='',
-                        help='Comma-separated list of tool names to surface in the INIT line')
     args = parser.parse_args()
 
-    turn = 0
-    prev_usage = None  # (in, out, cache_read, cache_create)
-    last_assistant_text = ""
+    turn_ref = [0]
+    prev_usage_ref = [None]  # (in, out, cache_read, cache_create)
+    last_assistant_text_ref = [""]
+    tool_id_to_name = {}
 
     for line in sys.stdin:
         line = line.strip()
@@ -65,134 +221,29 @@ def main():
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
+            # Malformed JSON line — legitimate intermittent stream artifact,
+            # skip silently. Anything else below is a code or schema bug.
             continue
 
-        event_type = event.get("type", "")
-        subtype = event.get("subtype", "")
-        ts = datetime.now().strftime("%H:%M:%S")
-
-        # --- Init ---
-        if event_type == "system" and subtype == "init":
-            model = event.get("model", "?")
-            tools = event.get("tools", [])
-            # Filter to just the allowed tools
-            if args.allowed_tools:
-                allowed_set = set(args.allowed_tools.split(','))
-                allowed = [t for t in tools if t in allowed_set]
-            else:
-                allowed = tools
-            print(f"[{ts}] INIT | model={model} tools={','.join(allowed)}")
-            sys.stdout.flush()
-
-        # --- Assistant message (text + tool_use) ---
-        elif event_type == "assistant":
-            msg = event.get("message", {})
-            content_blocks = msg.get("content", [])
-            usage = msg.get("usage", {})
-
-            in_tok = usage.get("input_tokens", 0)
-            out_tok = usage.get("output_tokens", 0)
-            cache_read = usage.get("cache_read_input_tokens", 0)
-            cache_create = usage.get("cache_creation_input_tokens", 0)
-            current_usage = (in_tok, out_tok, cache_read, cache_create)
-
-            if current_usage != prev_usage:
-                # New API call — new turn
-                turn += 1
-                prev_usage = current_usage
-                print(f"\n[{ts}] === TURN {turn} === (in={in_tok} out={out_tok} cache_read={cache_read} cache_create={cache_create})")
-            else:
-                # Same API call — subseparator
-                print(f"           ---")
-
-            for block in content_blocks:
-                block_type = block.get("type", "")
-
-                if block_type == "text":
-                    text = block.get("text", "").strip()
-                    if text:
-                        wrapped = truncate(text, 1000)
-                        print(f"[{ts}] TEXT | {wrapped}")
-                        last_assistant_text = text
-
-                elif block_type == "tool_use":
-                    name = block.get("name", "?")
-                    tool_input = block.get("input", {})
-                    tool_id = block.get("id", "?")
-                    summary = format_tool_input(name, tool_input)
-                    print(f"[{ts}] CALL | {name}({summary})")
-
-                elif block_type == "thinking":
-                    thinking = block.get("thinking", "").strip()
-                    if thinking:
-                        print(f"[{ts}] THINK | {truncate(thinking, 500)}")
-
-            sys.stdout.flush()
-
-        # --- Tool result ---
-        elif event_type == "tool_result":
-            tool_name = event.get("tool_name", "?")
-            tool_id = event.get("tool_use_id", "")
-            content = event.get("content", "")
-            is_error = event.get("is_error", False)
-
-            # Extract text from content blocks
-            if isinstance(content, list):
-                parts = []
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        parts.append(block.get("text", ""))
-                    elif isinstance(block, str):
-                        parts.append(block)
-                content = "\n".join(parts)
-            elif not isinstance(content, str):
-                content = str(content)
-
-            prefix = "ERROR" if is_error else "RESULT"
-            print(f"[{ts}] {prefix} | {tool_name} → {truncate(content, 300)}")
-            sys.stdout.flush()
-
-        # --- Final result ---
-        elif event_type == "result":
-            cost = event.get("total_cost_usd", 0)
-            duration = event.get("duration_ms", 0)
-            num_turns = event.get("num_turns", 0)
-            stop_reason = event.get("stop_reason", "?")
-            is_error = event.get("is_error", False)
-            errors = event.get("errors", [])
-
-            model_usage = event.get("modelUsage", {})
-            for model, stats in model_usage.items():
-                print(f"\n[{ts}] USAGE | model={model} in={stats.get('inputTokens', 0)} out={stats.get('outputTokens', 0)} "
-                      f"cache_read={stats.get('cacheReadInputTokens', 0)} cache_create={stats.get('cacheCreationInputTokens', 0)}")
-
-            status = "ERROR" if is_error else "DONE"
-            print(f"[{ts}] {status} | turns={num_turns} cost=${cost:.4f} duration={duration / 1000:.1f}s stop={stop_reason}")
-
-            if errors:
-                for err in errors:
-                    print(f"[{ts}] ERROR | {err}")
-
-            if args.extract_result_path:
-                result_text = event.get("result", "") or last_assistant_text
-                if result_text:
-                    try:
-                        with open(args.extract_result_path, 'w') as f:
-                            f.write(result_text)
-                    except IOError:
-                        pass
-
-            sys.stdout.flush()
-
-        # --- Hook events ---
-        elif event_type == "system" and subtype in ("hook_started", "hook_response"):
-            hook_name = event.get("hook_name", "?")
-            if subtype == "hook_started":
-                print(f"[{ts}] HOOK | {hook_name} started")
-            else:
-                outcome = event.get("outcome", "?")
-                print(f"[{ts}] HOOK | {hook_name} → {outcome}")
-            sys.stdout.flush()
+        try:
+            event_type = event.get("type", "")
+            subtype = event.get("subtype", "")
+            ts = datetime.now().strftime("%H:%M:%S")
+            _dispatch_event(event, event_type, subtype, ts,
+                            tool_id_to_name, prev_usage_ref,
+                            turn_ref, last_assistant_text_ref,
+                            args)
+        except Exception as exc:
+            # Loud failure: write a clear diagnostic to stderr (which the
+            # caller redirects to agent.log) and re-raise. The hook's
+            # cursor logic (post-merge.sh / session-capture-worker.sh) is
+            # responsible for treating a nonzero formatter exit as a
+            # failure that does NOT advance the SHA cursor.
+            print(f"format-agent-log: unexpected error processing event: {exc}",
+                  file=sys.stderr)
+            print(f"  line[:200]: {line[:200]!r}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            raise
 
 
 if __name__ == "__main__":

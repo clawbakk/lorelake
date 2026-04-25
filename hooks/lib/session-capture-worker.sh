@@ -50,7 +50,7 @@ hook_start "$HOOK_NAME" "$LOG_FILE" "$CONFIG_FILE" "$LIB_DIR"
 
 # --- Recursion guard (belt-and-suspenders; foreground already checked) ---
 if [ "${IS_LLAKE_AGENT:-}" = "true" ]; then
-  hook_end "skipped: recursion guard" "$LOG_FILE"
+  hook_end "skipped: recursion guard [${LLAKE_AGENT_ID:-unknown}]" "$LOG_FILE"
   exit 0
 fi
 
@@ -82,7 +82,7 @@ MIDDLE_MAX_SIZE=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "transcript.m
 MIDDLE_SCALE_START=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "transcript.middleScaleStart")
 MAX_MSG_LEN=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "transcript.maxMessageLength")
 
-# Convert allowedTools JSON array to comma-separated string for --allowedTools flag
+# Convert allowedTools JSON array to comma-separated string for the --tools flag
 ALLOWED_TOOLS=$(python3 -c "import json,sys; print(','.join(json.loads(sys.argv[1])))" "$ALLOWED_TOOLS_JSON" 2>/dev/null || echo "Read,Write,Edit,Glob,Grep,Bash")
 
 # Build writable categories section for agent prompt
@@ -229,11 +229,27 @@ EOF
   TRIAGE_RESULT_FILE="$SESSION_DIR/triage-result.txt"
 
   # --- Prepare triage prompt ---
+  TRIAGE_RENDER_ERR="$AGENT_DIR/triage-render.err"
   TRIAGE_PROMPT=$(python3 "$LIB_DIR/render-prompt.py" \
     --templates-dir "$TEMPLATES_DIR" \
     "$PROMPTS_DIR/triage.md.tmpl" \
     "$CONFIG_FILE" \
-    "SESSION_DIR=$SESSION_DIR")
+    "SESSION_DIR=$SESSION_DIR" 2>"$TRIAGE_RENDER_ERR")
+  TRIAGE_RENDER_EXIT=$?
+
+  if [ "$TRIAGE_RENDER_EXIT" -ne 0 ] || [ -z "$TRIAGE_PROMPT" ]; then
+    TRIAGE_ERR=$(cat "$TRIAGE_RENDER_ERR" 2>/dev/null)
+    rm -f "$TRIAGE_RENDER_ERR"
+    log_render_failure "TRIAGE" "$TRIAGE_RENDER_EXIT" "$TRIAGE_ERR" "$AGENT_LOG"
+    kill "$WATCHDOG_PID" 2>/dev/null
+    wait "$WATCHDOG_PID" 2>/dev/null
+    rm -rf "$SESSION_DIR"
+    ERR_SUMMARY=$(render_err_summary "$TRIAGE_ERR")
+    printf "%s | %-13s | render-failed: triage prompt (agent %s, exit %s): %s\n" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" "$TRIAGE_RENDER_EXIT" "$ERR_SUMMARY" >> "$LOG_FILE"
+    exit 0
+  fi
+  rm -f "$TRIAGE_RENDER_ERR"
 
   # --- Pass 1: Triage ---
   echo "" >> "$AGENT_LOG"
@@ -242,15 +258,41 @@ EOF
   CURRENT_PID_FILE="$AGENT_DIR/triage.pid"
   echo "$MY_PID" > "$CURRENT_PID_FILE"
 
+  # Triage runs as a SYNCHRONOUS foreground pipeline (no `&`), so
+  # `${PIPESTATUS[0]}` on the next line correctly captures claude's exit
+  # code. The capture phase below uses a backgrounded inner subshell —
+  # `( ... exit ${PIPESTATUS[0]} ) & wait $CLAUDE_PID` — because there
+  # `wait` would otherwise return the formatter's exit code. Do NOT
+  # "unify" the patterns: the asymmetry is intentional. If USR1 arrives
+  # mid-pipeline, the trap in agent-run.sh `exit 143`s the outer subshell
+  # before L277 is evaluated, so TRIAGE_EXIT is never read in that path.
   IS_LLAKE_AGENT=true LLAKE_AGENT_ID="$TRIAGE_AGENT_ID" \
     claude --model "$TRIAGE_MODEL" --effort "$TRIAGE_EFFORT" \
     -p "$TRIAGE_PROMPT" \
-    --allowedTools "Read" \
+    --tools "Read" \
+    --strict-mcp-config \
     --max-budget-usd 0.50 \
     --output-format stream-json --verbose 2>&1 \
-    | python3 "$FORMATTER" --extract-result "$TRIAGE_RESULT_FILE" >> "$AGENT_LOG"
+    | python3 "$FORMATTER" --extract-result "$TRIAGE_RESULT_FILE" >> "$AGENT_LOG" 2>&1
+  _triage_pstat=("${PIPESTATUS[@]}")
+  TRIAGE_EXIT="${_triage_pstat[0]}"
+  TRIAGE_FORMATTER_EXIT="${_triage_pstat[1]:-0}"
+  if [ "$TRIAGE_FORMATTER_EXIT" -ne 0 ]; then
+    echo "$TRIAGE_FORMATTER_EXIT" > "$AGENT_DIR/formatter-exit"
+  fi
 
   rm -f "$CURRENT_PID_FILE"
+
+  if [ "$TRIAGE_EXIT" -ne 0 ]; then
+    echo "" >> "$AGENT_LOG"
+    echo "=== TRIAGE FAILED: exit $TRIAGE_EXIT at $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$AGENT_LOG"
+    printf "%s | %-13s | triage-failed: agent %s (exit %s)\n" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$TRIAGE_AGENT_ID" "$TRIAGE_EXIT" >> "$LOG_FILE"
+    kill "$WATCHDOG_PID" 2>/dev/null
+    wait "$WATCHDOG_PID" 2>/dev/null
+    rm -rf "$SESSION_DIR"
+    exit 0
+  fi
 
   # Parse triage result
   if [ -f "$TRIAGE_RESULT_FILE" ]; then
@@ -275,6 +317,7 @@ EOF
   fi
 
   # --- Prepare capture prompt ---
+  CAPTURE_RENDER_ERR="$AGENT_DIR/capture-render.err"
   CAPTURE_PROMPT=$(python3 "$LIB_DIR/render-prompt.py" \
     --templates-dir "$TEMPLATES_DIR" \
     "$PROMPTS_DIR/capture.md.tmpl" \
@@ -287,7 +330,22 @@ EOF
     "LLAKE_ROOT=$LLAKE_ROOT" \
     "WIKI_ROOT=$WIKI_ROOT" \
     "SCHEMA_DIR=$SCHEMA_DIR" \
-    "SESSION_DIR=$SESSION_DIR")
+    "SESSION_DIR=$SESSION_DIR" 2>"$CAPTURE_RENDER_ERR")
+  CAPTURE_RENDER_EXIT=$?
+
+  if [ "$CAPTURE_RENDER_EXIT" -ne 0 ] || [ -z "$CAPTURE_PROMPT" ]; then
+    CAPTURE_ERR=$(cat "$CAPTURE_RENDER_ERR" 2>/dev/null)
+    rm -f "$CAPTURE_RENDER_ERR"
+    log_render_failure "CAPTURE" "$CAPTURE_RENDER_EXIT" "$CAPTURE_ERR" "$AGENT_LOG"
+    kill "$WATCHDOG_PID" 2>/dev/null
+    wait "$WATCHDOG_PID" 2>/dev/null
+    rm -rf "$SESSION_DIR"
+    ERR_SUMMARY=$(render_err_summary "$CAPTURE_ERR")
+    printf "%s | %-13s | render-failed: capture prompt (agent %s, exit %s): %s\n" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" "$CAPTURE_RENDER_EXIT" "$ERR_SUMMARY" >> "$LOG_FILE"
+    exit 0
+  fi
+  rm -f "$CAPTURE_RENDER_ERR"
 
   # --- Pass 2: Capture ---
   echo "" >> "$AGENT_LOG"
@@ -296,13 +354,26 @@ EOF
   CURRENT_PID_FILE="$AGENT_DIR/capture.pid"
   echo "$MY_PID" > "$CURRENT_PID_FILE"
 
-  IS_LLAKE_AGENT=true LLAKE_AGENT_ID="$CAPTURE_AGENT_ID" \
-    claude --model "$CAPTURE_MODEL" --effort "$CAPTURE_EFFORT" \
-    -p "$CAPTURE_PROMPT" \
-    --allowedTools "$ALLOWED_TOOLS" \
-    --max-budget-usd "$MAX_BUDGET_USD" \
-    --output-format stream-json --verbose 2>&1 \
-    | python3 "$FORMATTER" >> "$AGENT_LOG" &
+  # Wrap in a subshell so PIPESTATUS[0] (claude's exit code) becomes the
+  # subshell's exit code. `wait "$CLAUDE_PID"` would otherwise return the
+  # formatter's exit code (always 0).
+  (
+    IS_LLAKE_AGENT=true LLAKE_AGENT_ID="$CAPTURE_AGENT_ID" \
+      claude --model "$CAPTURE_MODEL" --effort "$CAPTURE_EFFORT" \
+      -p "$CAPTURE_PROMPT" \
+      --tools "$ALLOWED_TOOLS" \
+      --strict-mcp-config \
+      --max-budget-usd "$MAX_BUDGET_USD" \
+      --output-format stream-json --verbose 2>&1 \
+      | python3 "$FORMATTER" >> "$AGENT_LOG" 2>&1
+    _pstat=("${PIPESTATUS[@]}")
+    CLAUDE_EXIT="${_pstat[0]}"
+    FORMATTER_EXIT="${_pstat[1]:-0}"
+    if [ "$FORMATTER_EXIT" -ne 0 ]; then
+      echo "$FORMATTER_EXIT" > "$AGENT_DIR/formatter-exit"
+    fi
+    exit "$CLAUDE_EXIT"
+  ) &
   CLAUDE_PID=$!
 
   # Wait for agent to finish (or be killed)
@@ -318,21 +389,44 @@ EOF
   # Clean up session directory
   rm -rf "$SESSION_DIR"
 
-  # Log completion
+  # Detect formatter crash before normal dispatch. Same contract as
+  # post-merge.sh: cursor is held (session-capture has no SHA cursor, but
+  # the log line distinguishes formatter crash from external kill).
+  FORMATTER_EXIT=0
+  if [ -f "$AGENT_DIR/formatter-exit" ]; then
+    FORMATTER_EXIT=$(cat "$AGENT_DIR/formatter-exit")
+    rm -f "$AGENT_DIR/formatter-exit"
+  fi
+
+  # Log completion. See note in post-merge.sh on trap vs external-kill
+  # distinction for 137/143: if the trap fired, we would have exited 143
+  # already and never reached this block.
   echo "" >> "$AGENT_LOG"
-  if [ "$EXIT_CODE" -eq 0 ]; then
+  if [ "$FORMATTER_EXIT" -ne 0 ]; then
+    echo "=== FAILED: formatter crashed (exit $FORMATTER_EXIT, agent exit $EXIT_CODE) at $(date '+%Y-%m-%d %H:%M:%S') — see traceback above ===" >> "$AGENT_LOG"
+    printf "%s | %-13s | failed: formatter crashed (agent %s, formatter exit %s, agent exit %s) — see agent.log\n" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" "$FORMATTER_EXIT" "$EXIT_CODE" >> "$LOG_FILE"
+  elif [ "$EXIT_CODE" -eq 0 ]; then
     echo "=== COMPLETED: exit 0 at $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$AGENT_LOG"
     printf "%s | %-13s | completed: agent %s finished (exit 0)\n" \
       "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" >> "$LOG_FILE"
   elif [ "$EXIT_CODE" -eq 137 ] || [ "$EXIT_CODE" -eq 143 ]; then
-    echo "=== KILLED: exit $EXIT_CODE at $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$AGENT_LOG"
+    echo "=== KILLED: exit $EXIT_CODE at $(date '+%Y-%m-%d %H:%M:%S') (external) ===" >> "$AGENT_LOG"
+    printf "%s | %-13s | killed: agent %s (exit %s, external)\n" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" "$EXIT_CODE" >> "$LOG_FILE"
   else
     echo "=== FAILED: exit $EXIT_CODE at $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$AGENT_LOG"
     printf "%s | %-13s | failed: agent %s (exit %s)\n" \
       "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" "$EXIT_CODE" >> "$LOG_FILE"
   fi
 ) </dev/null >/dev/null 2>&1 &
-disown
+BG_PID=$!
+
+if [ "${LLAKE_SESSION_CAPTURE_SYNC:-}" = "1" ]; then
+  wait "$BG_PID" 2>/dev/null
+else
+  disown "$BG_PID"
+fi
 
 hook_end "done: spawned agent $AGENT_ID (session: $SESSION_ID, turns: $TURN_COUNT, timeout: ${MAX_TIMEOUT_SEC}s)" "$LOG_FILE"
 exit 0

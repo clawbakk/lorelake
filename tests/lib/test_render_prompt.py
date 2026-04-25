@@ -107,3 +107,71 @@ def test_relative_fallback_resolved_against_templates_dir(tmp_path):
     result = subprocess.run(cmd, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout == "FROM TEMPLATES DIR"
+
+
+def test_literal_braces_in_slot_value_are_preserved(tmp_path):
+    """Custom slot values may legitimately contain literal {{NAME}} text (e.g.
+    meta-documentation about the renderer's own syntax). The leftover check
+    must not flag such text as unresolved, because it's user content, not
+    template wiring."""
+    tmpl = tmp_path / "ingest.md.tmpl"
+    write(tmpl, "Examples:\n{{EXAMPLES}}")
+    cfg = tmp_path / "config.json"
+    slot_value = (
+        "Commit: `feat: add {{KEY|fallback:path}} file-read syntax`\n"
+        "Note: every new {{VAR}} must be wired in both places."
+    )
+    write(cfg, json.dumps({"prompts": {"ingest": {"EXAMPLES": slot_value}}}))
+
+    rc, out, err = render(tmpl, cfg)
+    assert rc == 0, err
+    assert out == "Examples:\n" + slot_value
+
+
+def test_ingest_template_renders_with_critical_rules_section():
+    """The ingest template must render cleanly and surface the CRITICAL RULES block."""
+    repo_root = REPO_ROOT
+    templates_dir = repo_root / "templates"
+    ingest_tmpl = repo_root / "hooks" / "prompts" / "ingest.md.tmpl"
+    config = templates_dir / "config.default.json"
+
+    result = subprocess.run(
+        [
+            "python3", str(SCRIPT),
+            "--templates-dir", str(templates_dir),
+            str(ingest_tmpl),
+            str(config),
+            "AGENT_ID=test-agent",
+            "PROJECT_ROOT=/tmp/proj",
+            "LAST_SHA=aaaa",
+            "CURRENT_SHA=bbbb",
+            "COMMIT_RANGE=aaaa..bbbb",
+            "PATHSPEC_INCLUDE=-- 'src/'",
+            "LLAKE_ROOT=/tmp/proj/llake",
+            "WIKI_ROOT=/tmp/proj/llake/wiki",
+            "SCHEMA_DIR=/tmp/schema",
+        ],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, f"render failed: {result.stderr}"
+    out = result.stdout
+
+    assert "## CRITICAL RULES" in out, "CRITICAL RULES section missing"
+    # All 9 rules must be present.
+    for n in range(1, 10):
+        assert f"### R{n} —" in out, f"R{n} header missing"
+    # No unresolved placeholders should remain.
+    assert "{{" not in out, f"unresolved placeholder: {out!r}"
+
+
+def test_fallback_path_not_found_reports_diagnostic(tmp_path):
+    """When a fallback path cannot be read, render fails and prints a diagnostic."""
+    tmpl = tmp_path / "ingest.md.tmpl"
+    write(tmpl, "Examples:\n{{EXAMPLES|fallback:" + str(tmp_path / "does-not-exist.md") + "}}")
+    cfg = tmp_path / "config.json"
+    write(cfg, json.dumps({"prompts": {"ingest": {"EXAMPLES": ""}}}))
+
+    rc, out, err = render(tmpl, cfg)
+    assert rc != 0
+    assert "EXAMPLES" in err
+    assert "fallback read failed" in err

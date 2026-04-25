@@ -6,8 +6,8 @@
 # the user's session closes immediately; the worker runs in the background.
 #
 # Foreground responsibilities (in order):
-#   1. Recursion guard.
-#   2. Locate the project via marker walk (pure bash).
+#   1. Locate the project via marker walk (pure bash).
+#   2. Recursion guard — log skip and exit if fired by a LoreLake agent.
 #   3. Persist stdin to a tempfile the worker consumes.
 #   4. Log "dispatched (async)" to hooks.log.
 #   5. Fork the worker detached, or (if LLAKE_SESSION_END_SYNC=1) exec it.
@@ -27,11 +27,6 @@ source "$LIB_DIR/detect-project-root.sh"
 # shellcheck source=/dev/null
 source "$LIB_DIR/hook-log.sh"
 
-# --- Recursion guard (no project-root work needed) ---
-if [ "${IS_LLAKE_AGENT:-}" = "true" ]; then
-  exit 0
-fi
-
 # --- Project root via pure-bash marker walk ---
 PROJECT_ROOT=$(detect_project_root "$PWD" 2>/dev/null) || exit 0
 
@@ -39,6 +34,12 @@ LLAKE_ROOT="$PROJECT_ROOT/$LLAKE_DIR_NAME"
 STATE_DIR="$LLAKE_ROOT/.state"
 LOG_FILE="$STATE_DIR/hooks.log"
 mkdir -p "$STATE_DIR"
+
+# --- Recursion guard ---
+if [ "${IS_LLAKE_AGENT:-}" = "true" ]; then
+  hook_log_line "session-end" "skipped: recursion guard [${LLAKE_AGENT_ID:-unknown}]" "$LOG_FILE"
+  exit 0
+fi
 
 # --- Persist stdin for the worker ---
 TMP_INPUT=$(mktemp -t llake-session-end.XXXXXX)
