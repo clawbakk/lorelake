@@ -215,17 +215,8 @@ RENDER_EXIT=$?
 if [ "$RENDER_EXIT" -ne 0 ] || [ -z "$INGEST_PROMPT" ]; then
   RENDER_ERR=$(cat "$RENDER_STDERR_FILE" 2>/dev/null)
   rm -f "$RENDER_STDERR_FILE"
-  {
-    echo ""
-    echo "=== RENDER FAILED: exit $RENDER_EXIT at $(date '+%Y-%m-%d %H:%M:%S') ==="
-    if [ -n "$RENDER_ERR" ]; then
-      echo "$RENDER_ERR"
-    else
-      echo "(renderer produced empty prompt with exit $RENDER_EXIT)"
-    fi
-  } >> "$AGENT_LOG"
-  ERR_SUMMARY=$(echo "$RENDER_ERR" | head -1 | tr -d '\n' | cut -c1-200)
-  [ -z "$ERR_SUMMARY" ] && ERR_SUMMARY="empty prompt"
+  log_render_failure "" "$RENDER_EXIT" "$RENDER_ERR" "$AGENT_LOG"
+  ERR_SUMMARY=$(render_err_summary "$RENDER_ERR")
   hook_end "skipped: render-prompt failed (agent $AGENT_ID, exit $RENDER_EXIT): $ERR_SUMMARY" "$LOG_FILE"
   exit 0
 fi
