@@ -69,6 +69,9 @@ JSON
     STUB_STREAM_FILE="${STUB_STREAM_FILE:-}" \
     STUB_RECORD_FILE="${STUB_RECORD_FILE:-}" \
     STUB_COUNT_FILE="${STUB_COUNT_FILE:-}" \
+    STUB_EXIT_CODES="${STUB_EXIT_CODES:-}" \
+    STUB_STREAM_FILES="${STUB_STREAM_FILES:-}" \
+    STUB_DELAY_SEC="${STUB_DELAY_SEC:-0}" \
     bash "$REPO_ROOT/hooks/lib/session-capture-worker.sh" "$tmp_input"
 }
 
@@ -104,29 +107,19 @@ test_triage_agent_fails() {
 test_capture_agent_fails() {
   local proj; proj=$(mkproject)
   local tr="$proj/transcript.jsonl"; make_fake_transcript "$tr"
-  # Two successive claude invocations: triage (exit 0 + CAPTURE stream) then
-  # capture (exit 2). Use a counting stub so each call has a distinct outcome.
-  cat > "$STUB_BIN/claude" <<'STUB'
-#!/bin/bash
-COUNT_FILE="${STUB_COUNT_FILE:-/tmp/llake-stub-count}"
-N=0; [ -f "$COUNT_FILE" ] && N=$(cat "$COUNT_FILE")
-N=$((N+1)); echo "$N" > "$COUNT_FILE"
-if [ "$N" = "1" ]; then
-  echo '{"type":"system","subtype":"init"}'
-  echo '{"type":"result","subtype":"success","result":"CAPTURE: force capture"}'
-  exit 0
-fi
-exit 2
-STUB
-  chmod +x "$STUB_BIN/claude"
-  local count_file; count_file=$(mktemp)
+  local count_file; count_file=$(mktemp -t llake-stub-count.XXXXXX)
+
+  # Two successive claude invocations:
+  #   #1 (triage):  STUB_STREAM_FILES element 1 = triage-capture stream, exit 0
+  #   #2 (capture): no stream override, exit 2
   STUB_COUNT_FILE="$count_file" \
+    STUB_STREAM_FILES="$STREAM_DIR/triage-capture.jsonl," \
+    STUB_EXIT_CODES="0,2" \
     run_worker "$proj" "sess-capfail" "$tr"
+
   assert_log_grep "cap-fail:log" "$proj/llake/.state/hooks.log" "failed: agent .*exit 2"
+
   rm -f "$count_file"
-  # Restore the normal stub for any subsequent tests.
-  cp "$FIXTURES/claude-stub.sh" "$STUB_BIN/claude"
-  chmod +x "$STUB_BIN/claude"
   rm -rf "$proj"
 }
 
