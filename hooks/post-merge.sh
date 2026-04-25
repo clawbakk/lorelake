@@ -249,8 +249,14 @@ rm -f "$RENDER_STDERR_FILE"
     --strict-mcp-config \
     --max-budget-usd "$MAX_BUDGET_USD" \
     --output-format stream-json --verbose 2>&1 \
-    | python3 "$LIB_DIR/format-agent-log.py" >> "$AGENT_LOG"
-    exit ${PIPESTATUS[0]}
+    | python3 "$LIB_DIR/format-agent-log.py" >> "$AGENT_LOG" 2>&1
+    _pstat=("${PIPESTATUS[@]}")
+    CLAUDE_EXIT="${_pstat[0]}"
+    FORMATTER_EXIT="${_pstat[1]:-0}"
+    if [ "$FORMATTER_EXIT" -ne 0 ]; then
+      echo "$FORMATTER_EXIT" > "$AGENT_DIR/formatter-exit"
+    fi
+    exit "$CLAUDE_EXIT"
   ) &
   CLAUDE_PID=$!
 
@@ -264,11 +270,28 @@ rm -f "$RENDER_STDERR_FILE"
   kill "$WATCHDOG_PID" 2>/dev/null
   wait "$WATCHDOG_PID" 2>/dev/null
 
+  # Detect a formatter crash before normal dispatch. The sidecar is
+  # written by the inner subshell only when the formatter exited
+  # nonzero — meaning claude likely received SIGPIPE (EXIT_CODE=141).
+  # Cursor logic unchanged: this case falls through to FAILED below
+  # (no SHA advance), but we log a distinct line so the operator
+  # knows it was the formatter, not an external kill.
+  FORMATTER_EXIT=0
+  if [ -f "$AGENT_DIR/formatter-exit" ]; then
+    FORMATTER_EXIT=$(cat "$AGENT_DIR/formatter-exit")
+    rm -f "$AGENT_DIR/formatter-exit"
+  fi
+
   # Log completion. SHA advances ONLY on a clean run: render succeeded,
-  # agent spawned, agent exited 0. External kills and nonzero exits do NOT
-  # advance the cursor — the next post-merge will retry the range.
+  # agent spawned, agent exited 0. External kills, nonzero exits, and
+  # formatter crashes all hold the cursor — the next post-merge will
+  # retry the range once the underlying issue is fixed.
   echo "" >> "$AGENT_LOG"
-  if [ "$EXIT_CODE" -eq 0 ]; then
+  if [ "$FORMATTER_EXIT" -ne 0 ]; then
+    echo "=== FAILED: formatter crashed (exit $FORMATTER_EXIT, agent exit $EXIT_CODE) at $(date '+%Y-%m-%d %H:%M:%S') — see traceback above ===" >> "$AGENT_LOG"
+    printf "%s | %-13s | failed: formatter crashed (exit %s, agent exit %s, commits: %s) — cursor held; see agent.log\n" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$FORMATTER_EXIT" "$EXIT_CODE" "$COMMIT_RANGE" >> "$LOG_FILE"
+  elif [ "$EXIT_CODE" -eq 0 ]; then
     echo "$CURRENT_SHA" > "$SHA_FILE"
     echo "=== COMPLETED: exit 0 at $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$AGENT_LOG"
     printf "%s | %-13s | completed: agent %s finished (exit 0, commits: %s, sha: advanced to %s)\n" \

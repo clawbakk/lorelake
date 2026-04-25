@@ -273,8 +273,13 @@ EOF
     --strict-mcp-config \
     --max-budget-usd 0.50 \
     --output-format stream-json --verbose 2>&1 \
-    | python3 "$FORMATTER" --extract-result "$TRIAGE_RESULT_FILE" >> "$AGENT_LOG"
-  TRIAGE_EXIT=${PIPESTATUS[0]}
+    | python3 "$FORMATTER" --extract-result "$TRIAGE_RESULT_FILE" >> "$AGENT_LOG" 2>&1
+  _triage_pstat=("${PIPESTATUS[@]}")
+  TRIAGE_EXIT="${_triage_pstat[0]}"
+  TRIAGE_FORMATTER_EXIT="${_triage_pstat[1]:-0}"
+  if [ "$TRIAGE_FORMATTER_EXIT" -ne 0 ]; then
+    echo "$TRIAGE_FORMATTER_EXIT" > "$AGENT_DIR/formatter-exit"
+  fi
 
   rm -f "$CURRENT_PID_FILE"
 
@@ -360,8 +365,14 @@ EOF
       --strict-mcp-config \
       --max-budget-usd "$MAX_BUDGET_USD" \
       --output-format stream-json --verbose 2>&1 \
-      | python3 "$FORMATTER" >> "$AGENT_LOG"
-    exit ${PIPESTATUS[0]}
+      | python3 "$FORMATTER" >> "$AGENT_LOG" 2>&1
+    _pstat=("${PIPESTATUS[@]}")
+    CLAUDE_EXIT="${_pstat[0]}"
+    FORMATTER_EXIT="${_pstat[1]:-0}"
+    if [ "$FORMATTER_EXIT" -ne 0 ]; then
+      echo "$FORMATTER_EXIT" > "$AGENT_DIR/formatter-exit"
+    fi
+    exit "$CLAUDE_EXIT"
   ) &
   CLAUDE_PID=$!
 
@@ -378,11 +389,24 @@ EOF
   # Clean up session directory
   rm -rf "$SESSION_DIR"
 
+  # Detect formatter crash before normal dispatch. Same contract as
+  # post-merge.sh: cursor is held (session-capture has no SHA cursor, but
+  # the log line distinguishes formatter crash from external kill).
+  FORMATTER_EXIT=0
+  if [ -f "$AGENT_DIR/formatter-exit" ]; then
+    FORMATTER_EXIT=$(cat "$AGENT_DIR/formatter-exit")
+    rm -f "$AGENT_DIR/formatter-exit"
+  fi
+
   # Log completion. See note in post-merge.sh on trap vs external-kill
   # distinction for 137/143: if the trap fired, we would have exited 143
   # already and never reached this block.
   echo "" >> "$AGENT_LOG"
-  if [ "$EXIT_CODE" -eq 0 ]; then
+  if [ "$FORMATTER_EXIT" -ne 0 ]; then
+    echo "=== FAILED: formatter crashed (exit $FORMATTER_EXIT, agent exit $EXIT_CODE) at $(date '+%Y-%m-%d %H:%M:%S') — see traceback above ===" >> "$AGENT_LOG"
+    printf "%s | %-13s | failed: formatter crashed (agent %s, formatter exit %s, agent exit %s) — see agent.log\n" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" "$FORMATTER_EXIT" "$EXIT_CODE" >> "$LOG_FILE"
+  elif [ "$EXIT_CODE" -eq 0 ]; then
     echo "=== COMPLETED: exit 0 at $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$AGENT_LOG"
     printf "%s | %-13s | completed: agent %s finished (exit 0)\n" \
       "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" >> "$LOG_FILE"
