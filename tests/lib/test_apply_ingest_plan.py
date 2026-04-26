@@ -374,3 +374,192 @@ def test_apply_delete_into_discussions_rejected_and_file_kept(tmp_path):
     with pytest.raises(applier.ForbiddenPath):
         applier.apply_delete(wiki, "captured", today="2026-04-25", llake_root=llake)
     assert target.exists(), "ForbiddenPath must abort before unlink"
+
+
+import json as _json
+import subprocess as _sub
+
+REPO_ROOT_AIP = Path(__file__).resolve().parents[2]
+APPLIER_CLI = REPO_ROOT_AIP / "hooks" / "lib" / "apply-ingest-plan.py"
+
+
+def _run_applier(plan_path, wiki, llake, applied, failed, today="2026-04-25"):
+    cmd = ["python3", str(APPLIER_CLI),
+           "--plan", str(plan_path),
+           "--wiki-root", str(wiki),
+           "--llake-root", str(llake),
+           "--applied-out", str(applied),
+           "--failed-out", str(failed),
+           "--today", today]
+    return _sub.run(cmd, capture_output=True, text=True)
+
+
+def _write_log_md(llake):
+    (llake / "log.md").write_text("")
+
+
+def test_cli_applies_simple_update(tmp_path):
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    page = wiki / "hooks" / "a.md"
+    page.write_text(SAMPLE_PAGE)
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "trivial",
+        "updates": [{"slug": "a", "rationale": "x",
+                      "ops": [{"op": "frontmatter_set", "key": "description", "value": "Updated."}]}],
+        "creates": [], "deletes": [], "bidirectional_links": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                       "summary": "y", "pages_affected": ["a"]}
+    }
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(_json.dumps(plan))
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode == 0, res.stderr
+    assert "Updated." in (wiki / "hooks" / "a.md").read_text()
+    assert _json.loads(applied.read_text())["updates"][0]["slug"] == "a"
+    assert _json.loads(failed.read_text()) == []
+
+
+def test_cli_records_anchor_failure_continues_others(tmp_path):
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    (wiki / "hooks" / "a.md").write_text(SAMPLE_PAGE)
+    (wiki / "hooks" / "b.md").write_text(SAMPLE_PAGE.replace("Sample", "B"))
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "x",
+        "updates": [
+            {"slug": "a", "rationale": "broken", "ops": [{"op": "replace", "find": "NOT_THERE", "with": "x"}]},
+            {"slug": "b", "rationale": "ok", "ops": [{"op": "frontmatter_set", "key": "status", "value": "draft"}]},
+        ],
+        "creates": [], "deletes": [], "bidirectional_links": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                       "summary": "x", "pages_affected": ["a", "b"]}
+    }
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(_json.dumps(plan))
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode == 0, res.stderr  # best-effort: cursor advances
+    f = _json.loads(failed.read_text())
+    a_app = _json.loads(applied.read_text())
+    assert any(e["slug"] == "a" and e["reason"] == "AnchorNotFound" for e in f)
+    assert any(u["slug"] == "b" for u in a_app["updates"])
+
+
+def test_cli_rejects_schema_invalid_plan(tmp_path):
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; wiki.mkdir(parents=True)
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(_json.dumps({"bad": "plan"}))
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode != 0
+    assert "missing required key" in res.stderr or "version" in res.stderr
+
+
+def test_cli_appends_log_entry(tmp_path):
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    page = wiki / "hooks" / "a.md"; page.write_text(SAMPLE_PAGE)
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "Did the thing",
+        "updates": [{"slug": "a", "rationale": "x",
+                      "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
+        "creates": [], "deletes": [], "bidirectional_links": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                       "summary": "Did the thing", "pages_affected": ["a"]}
+    }
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(_json.dumps(plan))
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode == 0
+    log = (llake / "log.md").read_text()
+    assert "## [2026-04-25] ingest | v2 | abc..def" in log
+    assert "Did the thing" in log
+    assert "[[a]]" in log
+
+
+def test_cli_skip_reason_writes_skip_log_entry(tmp_path):
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; wiki.mkdir(parents=True)
+    _write_log_md(llake)
+    plan = {
+        "version": "1", "skip_reason": "no relevant changes",
+        "summary": "n/a", "updates": [], "creates": [], "deletes": [],
+        "bidirectional_links": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                       "summary": "n/a", "pages_affected": []}
+    }
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(_json.dumps(plan))
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode == 0
+    # Skip path still writes a log.md entry (spec: "Always" log an entry).
+    log = (llake / "log.md").read_text()
+    assert "## [2026-04-25] ingest | v2 | abc..def" in log
+    assert "skipped: no relevant changes" in log
+
+
+def test_cli_partial_failure_writes_inline_failure_list(tmp_path):
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    (wiki / "hooks" / "broken.md").write_text(SAMPLE_PAGE)
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "x",
+        "updates": [{"slug": "broken", "rationale": "anchor missing",
+                      "ops": [{"op": "replace", "find": "NOT_THERE", "with": "z"}]}],
+        "creates": [], "deletes": [], "bidirectional_links": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                       "summary": "x", "pages_affected": ["broken"]}
+    }
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(_json.dumps(plan))
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode == 0
+    log = (llake / "log.md").read_text()
+    assert "ingest-failures | v2 | 1 remaining" in log
+    assert "AnchorNotFound" in log
+    assert "[[broken]]" in log
+
+
+def test_bidirectional_link_skipped_when_partner_in_deletes(tmp_path):
+    # Spec line 289: silently skip bidirectional_links where either side is in deletes[].
+    # Verified at the CLI level — the skip logic lives in the orchestrator loop.
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    (wiki / "hooks" / "live.md").write_text(SAMPLE_PAGE)
+    (wiki / "hooks" / "doomed.md").write_text(SAMPLE_PAGE.replace("Sample", "Doomed"))
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "x",
+        "updates": [], "creates": [],
+        "deletes": [{"slug": "doomed", "rationale": "removed"}],
+        "bidirectional_links": [{"a": "live", "b": "doomed"}],
+        "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                       "summary": "x", "pages_affected": ["doomed"]}
+    }
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(_json.dumps(plan))
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode == 0, res.stderr
+    bidir = _json.loads(applied.read_text())["bidirectional_links"]
+    assert len(bidir) == 1
+    assert bidir[0].get("note") == "skipped_partner_deleted"
+    # The live page must NOT have gained a related: pointer to doomed.
+    live_text = (wiki / "hooks" / "live.md").read_text()
+    assert "[[doomed]]" not in live_text
+
+
+def test_cli_bidir_ghost_slug_holds_cursor(tmp_path):
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; wiki.mkdir(parents=True)
+    _write_log_md(llake)
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "x",
+        "updates": [], "creates": [], "deletes": [],
+        "bidirectional_links": [{"a": "ghost-1", "b": "ghost-2"}],
+        "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                       "summary": "x", "pages_affected": []}
+    }
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(_json.dumps(plan))
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    # Schema-level integrity: cursor held, no log.md or output mutation.
+    assert res.returncode != 0
+    assert (llake / "log.md").read_text() == ""
+    assert not applied.exists() or applied.read_text() == ""
+    assert not failed.exists() or failed.read_text() == ""

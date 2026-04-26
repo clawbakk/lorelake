@@ -100,20 +100,13 @@ def validate(plan):
             else:
                 seen[s] = bucket
 
-    # bidirectional_links referential integrity (existing-slug check is left to applier;
-    # this step only checks against in-plan slugs and rejects pairs where one side is in deletes)
-    in_plan_slugs = set(update_slugs) | set(create_slugs)
-    deleted_slugs = set(delete_slugs)
+    # bidirectional_links: structural check only. Links where one side is in deletes[]
+    # are silently skipped by the CLI (spec line 289) — not a schema error here.
+    # Existence-against-wiki is the applier's job.
     for i, link in enumerate(plan["bidirectional_links"]):
         if not isinstance(link, dict):
             errors.append(f"bidirectional_links[{i}]: expected object")
             continue
-        for side in ("a", "b"):
-            slug = link.get(side)
-            if slug in deleted_slugs:
-                errors.append(f"bidirectional_links[{i}].{side}: slug {slug!r} is in deletes (cannot link a deleted page)")
-            # The "exists in wiki OR in creates[]" check is the applier's job
-            # (it has wiki-index.json); here we only catch in-plan inconsistencies.
 
     # log_entry.pages_affected must equal the union of touched slugs
     le = plan["log_entry"]

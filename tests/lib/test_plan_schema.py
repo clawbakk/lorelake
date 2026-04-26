@@ -96,21 +96,17 @@ def test_slug_in_two_buckets_rejected(tmp_path):
     assert "x" in err and ("updates" in err or "deletes" in err)
 
 
-def test_bidirectional_link_to_deleted_slug_rejected(tmp_path):
-    # The validator only catches in-plan inconsistencies; existence-against-wiki
-    # is the applier's job (see Task 12: test_cli_bidir_ghost_slug_holds_cursor).
-    # Here: linking to a slug that's in deletes[] is a self-contradiction the
-    # validator must reject.
+def test_bidirectional_link_to_deleted_slug_is_valid(tmp_path):
+    # Links where one side is in deletes[] are silently skipped by the CLI
+    # (spec line 289: "silently skip bidirectional_links where either side is in deletes[]").
+    # The validator allows these — existence checks are the applier's job.
     plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
     plan["deletes"] = [{"slug": "x", "rationale": "r"}]
     plan["bidirectional_links"] = [{"a": "x", "b": "y"}]
     plan["log_entry"]["pages_affected"] = ["x"]
     p = write_plan(tmp_path, plan)
     rc, _, err = run_validator(p)
-    assert rc != 0
-    assert "bidirectional_links" in err
-    assert "x" in err
-    assert "deletes" in err
+    assert rc == 0, f"expected valid plan; stderr: {err}"
 
 
 def test_log_entry_pages_affected_mismatch_rejected(tmp_path):

@@ -337,6 +337,159 @@ def apply_bidirectional_link(wiki_root, slug_a, slug_b):
     _ensure_related_contains(b_path, f"[[{slug_a}]]")
 
 
+import argparse
+import json as _json_mod
+import sys as _sys
+import importlib as _imp
+from pathlib import Path as _Path
+
+_plan_schema = _imp.import_module("plan-schema")
+
+
+def _classify_error(exc):
+    """Map an ApplyError instance to the failed.json `reason` string."""
+    if isinstance(exc, ApplyError):
+        return exc.reason
+    return "IOError"
+
+
+def _append_log_entry(llake_root, today, log_entry, has_failures, skip_reason=None, failures=None):
+    log_path = llake_root / "log.md"
+    if skip_reason:
+        skip_line = (
+            f"## [{today}] ingest | v2 | {log_entry['commit_range']} "
+            f"| skipped: {skip_reason}\n"
+        )
+        with open(log_path, "a") as f:
+            f.write("\n" + skip_line + "\n")
+        return
+    line = f"## [{today}] ingest | v2 | {log_entry['commit_range']} | {log_entry['summary']}\n"
+    pages = log_entry.get("pages_affected") or []
+    pages_line = "Pages affected: " + ", ".join(f"[[{p}]]" for p in pages) + "\n" if pages else ""
+    suffix = "\n" + line + pages_line + "\n"
+    with open(log_path, "a") as f:
+        f.write(suffix)
+    if has_failures:
+        fails = failures or []
+        fail_header = f"## [{today}] ingest-failures | v2 | {len(fails)} remaining\n"
+        with open(log_path, "a") as f:
+            f.write(fail_header)
+            for fail in fails:
+                slug = fail.get("slug", "?")
+                reason = fail.get("reason", "?")
+                detail = (fail.get("detail") or "")
+                if len(detail) > 120:
+                    detail = detail[:117] + "..."
+                f.write(f"- [[{slug}]]: {reason} — {detail}\n")
+            f.write("\n")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--plan", required=True)
+    ap.add_argument("--wiki-root", required=True)
+    ap.add_argument("--llake-root", required=True)
+    ap.add_argument("--applied-out", required=True)
+    ap.add_argument("--failed-out", required=True)
+    ap.add_argument("--today", required=True, help="ISO date for `updated:` bumps and log entry")
+    args = ap.parse_args()
+
+    llake_root = _Path(args.llake_root)
+    wiki_root = _Path(args.wiki_root)
+
+    try:
+        plan = _json_mod.loads(_Path(args.plan).read_text())
+    except (IOError, _json_mod.JSONDecodeError) as e:
+        print(f"apply-ingest-plan: cannot read/parse plan {args.plan}: {e}", file=_sys.stderr)
+        _sys.exit(2)
+
+    schema_errors = _plan_schema.validate(plan)
+    if schema_errors:
+        for e in schema_errors:
+            print(e, file=_sys.stderr)
+        _sys.exit(1)
+
+    # Bidirectional-link existence check (treated as schema-level — cursor held on
+    # failure). The plan-schema validator can't see the wiki; the CLI can.
+    known_slugs = {p.stem for p in wiki_root.rglob("*.md")} | {c["slug"] for c in plan["creates"]}
+    ref_errors = []
+    for i, link in enumerate(plan["bidirectional_links"]):
+        for side in ("a", "b"):
+            slug = link.get(side)
+            if slug not in known_slugs:
+                ref_errors.append(
+                    f"bidirectional_links[{i}].{side}: slug {slug!r} does not exist "
+                    "in wiki and is not in creates[]"
+                )
+    if ref_errors:
+        for e in ref_errors:
+            print(e, file=_sys.stderr)
+        _sys.exit(1)
+
+    if plan.get("skip_reason"):
+        _Path(args.applied_out).write_text(_json_mod.dumps(
+            {"updates": [], "creates": [], "deletes": [], "bidirectional_links": []}))
+        _Path(args.failed_out).write_text("[]")
+        _append_log_entry(llake_root, args.today, plan["log_entry"],
+                          has_failures=False, skip_reason=plan["skip_reason"])
+        return 0
+
+    applied = {"updates": [], "creates": [], "deletes": [], "bidirectional_links": []}
+    failed = []
+
+    for upd in plan["updates"]:
+        slug = upd["slug"]
+        try:
+            page_path = _resolve_slug_path(wiki_root, slug)
+            apply_update(page_path, upd, today=args.today,
+                         llake_root=llake_root, wiki_root=wiki_root)
+            applied["updates"].append({"slug": slug, "ops_applied": len(upd["ops"])})
+        except ApplyError as e:
+            failed.append({"slug": slug, "reason": _classify_error(e), "detail": str(e)})
+
+    for c in plan["creates"]:
+        slug = c["slug"]
+        try:
+            apply_create(wiki_root, c, today=args.today, llake_root=llake_root)
+            applied["creates"].append({"slug": slug, "category": c["category"]})
+        except ApplyError as e:
+            failed.append({"slug": slug, "reason": _classify_error(e), "detail": str(e)})
+
+    for d in plan["deletes"]:
+        slug = d["slug"]
+        try:
+            res = apply_delete(wiki_root, slug, today=args.today, llake_root=llake_root)
+            entry = {"slug": slug, "dangling_inline_links": res.get("dangling_inline_links", [])}
+            if res.get("note"):
+                entry["note"] = res["note"]
+            applied["deletes"].append(entry)
+        except ApplyError as e:
+            failed.append({"slug": slug, "reason": _classify_error(e), "detail": str(e)})
+
+    # Spec line 289: silently skip bidirectional_links where either side is in deletes[].
+    deleted_slugs = {d["slug"] for d in plan["deletes"]}
+    for link in plan["bidirectional_links"]:
+        if link["a"] in deleted_slugs or link["b"] in deleted_slugs:
+            applied["bidirectional_links"].append({
+                "a": link["a"], "b": link["b"],
+                "note": "skipped_partner_deleted",
+            })
+            continue
+        try:
+            apply_bidirectional_link(wiki_root, link["a"], link["b"])
+            applied["bidirectional_links"].append({"a": link["a"], "b": link["b"]})
+        except ApplyError as e:
+            failed.append({"slug": f"{link['a']}<->{link['b']}",
+                           "reason": _classify_error(e), "detail": str(e)})
+
+    _Path(args.applied_out).write_text(_json_mod.dumps(applied, indent=2))
+    _Path(args.failed_out).write_text(_json_mod.dumps(failed, indent=2))
+
+    _append_log_entry(llake_root, args.today, plan["log_entry"],
+                      has_failures=bool(failed), failures=failed)
+    return 0
+
+
 def apply_replace_ops(original, ops):
     """Apply a list of {op: replace, find, with} ops to `original` content.
 
@@ -368,3 +521,7 @@ def apply_replace_ops(original, ops):
     for start, end, replacement in reversed(spans):
         result = result[:start] + replacement + result[end:]
     return result
+
+
+if __name__ == '__main__':
+    _sys.exit(main())
