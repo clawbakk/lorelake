@@ -180,7 +180,8 @@ EOF
       --llake-root "$LLAKE_ROOT" \
       --applied-out "$APPLIED" \
       --failed-out "$FAILED" \
-      --today "$TODAY" >> "$AGENT_LOG" 2>&1; then
+      --today "$TODAY" \
+      --changes-json "$CONTEXT_DIR/changes.json" >> "$AGENT_LOG" 2>&1; then
     local fail_msg="schema-invalid"
     if tail -20 "$AGENT_LOG" | grep -q "non-JSON planner output"; then
       fail_msg="non-JSON-plan"
