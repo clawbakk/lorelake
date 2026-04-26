@@ -38,6 +38,8 @@ source "$LIB_DIR/constants.sh"
 source "$LIB_DIR/agent-id.sh"
 # shellcheck source=/dev/null
 source "$LIB_DIR/hook-log.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/post-merge-lock.sh"
 
 # post-merge fires inside a git repo by definition.
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
@@ -183,6 +185,12 @@ if [ "$USE_INGEST_V2" = "1" ]; then
     MAX_TIMEOUT_SEC="$V2_TIMEOUT"
     LLAKE_AGENT_ID="$V2_AGENT_ID"
     setup_kill_trap
+    if ! acquire_post_merge_lock; then
+      printf "%s | %-13s | skipped: post-merge lock held; v2 agent abandoned\n" \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" >> "$LOG_FILE"
+      exit 0
+    fi
+    trap 'release_post_merge_lock' EXIT
     (
       sleep "$V2_TIMEOUT"
       if kill -0 "$MY_PID" 2>/dev/null; then kill -USR1 "$MY_PID" 2>/dev/null; fi
@@ -280,6 +288,12 @@ rm -f "$RENDER_STDERR_FILE"
   CURRENT_PID_FILE="$AGENT_DIR/ingest.pid"
   echo "$MY_PID" > "$CURRENT_PID_FILE"
   setup_kill_trap
+  if ! acquire_post_merge_lock; then
+    printf "%s | %-13s | skipped: post-merge lock held; legacy agent abandoned\n" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" >> "$LOG_FILE"
+    exit 0
+  fi
+  trap 'release_post_merge_lock' EXIT
 
   # Single watchdog: sends USR1 to the outer subshell, triggering the trap's
   # timeout path for a full tree-kill.
