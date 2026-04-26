@@ -26,6 +26,75 @@ class EditOverlap(ApplyError):
     reason = "EditOverlap"
 
 
+import re
+
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
+
+
+class HeadingNotFound(ApplyError):
+    reason = "HeadingNotFound"
+
+
+def _heading_level(line):
+    m = re.match(r"^(#{1,6})\s+", line)
+    return len(m.group(1)) if m else 0
+
+
+def _find_section_end(text, heading_start, heading_level):
+    """Return the byte offset where a section ends.
+
+    A section ends at the next heading of the same or higher level (lower or
+    equal `#` count), or EOF.
+    """
+    pos = heading_start
+    line_end = text.find("\n", pos)
+    pos = line_end + 1 if line_end != -1 else len(text)
+    while pos < len(text):
+        next_line_end = text.find("\n", pos)
+        line = text[pos:next_line_end] if next_line_end != -1 else text[pos:]
+        m = re.match(r"^(#{1,6})\s+", line)
+        if m and len(m.group(1)) <= heading_level:
+            return pos
+        if next_line_end == -1:
+            return len(text)
+        pos = next_line_end + 1
+    return len(text)
+
+
+def apply_section_ops(content, ops):
+    """Apply append_section ops in declaration order. Each op operates on the
+    running text (not the original), so multiple appends to the same section
+    work the way the planner expects."""
+    result = content
+    for op in ops:
+        if op.get("op") != "append_section":
+            continue
+        target_heading = op["after_heading"]
+        # Match the heading at line start.
+        pattern = re.compile(r"^" + re.escape(target_heading) + r"\s*$", re.MULTILINE)
+        m = pattern.search(result)
+        if not m:
+            raise HeadingNotFound(f"heading not found: {target_heading!r}")
+        level = _heading_level(target_heading)
+        end = _find_section_end(result, m.start(), level)
+        # Ensure we insert BEFORE the next heading line (no extra blank line collapse).
+        # The convention: section content ends with \n; appended content also ends with \n;
+        # we keep one blank line between sections.
+        before = result[:end].rstrip("\n") + "\n"
+        appended = op["content"] if op["content"].endswith("\n") else op["content"] + "\n"
+        after = "\n" + result[end:] if result[end:] else ""
+        result = before + appended + after
+    return result
+
+
+def apply_body_replace(content, ops):
+    """If a body_replace op is present, return its content. Otherwise return the input unchanged."""
+    for op in ops:
+        if op.get("op") == "body_replace":
+            return op["content"]
+    return content
+
+
 def apply_replace_ops(original, ops):
     """Apply a list of {op: replace, find, with} ops to `original` content.
 

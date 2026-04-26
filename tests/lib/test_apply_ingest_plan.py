@@ -57,3 +57,56 @@ def test_replace_reverse_order_preserves_offsets():
     ]
     result = applier.apply_replace_ops(original, ops)
     assert result == "alpha-numeric-substantial-BBB-ZZZ\n"
+
+
+PAGE_WITH_SECTIONS = """# Top
+
+## Section A
+A line.
+
+## Section B
+B line.
+
+### B sub
+Sub line.
+
+## Section C
+C line.
+"""
+
+
+def test_append_section_inserts_before_next_same_level_heading():
+    ops = [{"op": "append_section", "after_heading": "## Section A", "content": "Appended.\n"}]
+    result = applier.apply_section_ops(PAGE_WITH_SECTIONS, ops)
+    # New content lands at the end of Section A, before "## Section B".
+    assert "A line.\nAppended.\n\n## Section B" in result
+
+
+def test_append_section_inserts_before_next_higher_level_when_subsection():
+    ops = [{"op": "append_section", "after_heading": "### B sub", "content": "Sub-appended.\n"}]
+    result = applier.apply_section_ops(PAGE_WITH_SECTIONS, ops)
+    # ### B sub is followed by ## Section C (higher level), so we land before that.
+    assert "Sub line.\nSub-appended.\n\n## Section C" in result
+
+
+def test_append_section_at_eof_when_no_following_heading():
+    ops = [{"op": "append_section", "after_heading": "## Section C", "content": "EOF append.\n"}]
+    result = applier.apply_section_ops(PAGE_WITH_SECTIONS, ops)
+    assert result.endswith("C line.\nEOF append.\n")
+
+
+def test_append_section_heading_not_found_raises():
+    with pytest.raises(applier.HeadingNotFound):
+        applier.apply_section_ops(PAGE_WITH_SECTIONS,
+            [{"op": "append_section", "after_heading": "## No Such", "content": "x"}])
+
+
+def test_body_replace_returns_new_content():
+    result = applier.apply_body_replace("anything", [{"op": "body_replace", "content": "REPLACED\n"}])
+    assert result == "REPLACED\n"
+
+
+def test_body_replace_no_op_passthrough():
+    """No body_replace in ops → returns the original."""
+    result = applier.apply_body_replace("original", [{"op": "replace", "find": "x", "with": "y"}])
+    assert result == "original"
