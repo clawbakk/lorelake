@@ -35,7 +35,10 @@ def _check_update(idx, upd, errors):
         errors.append(f"{base}: expected object")
         return
     _check_slug(upd.get("slug"), f"{base}.slug", errors)
-    ops = upd.get("ops") or []
+    if "ops" not in upd or not isinstance(upd["ops"], list):
+        errors.append(f"{base}.ops: required list (slug={upd.get('slug')!r})")
+        return
+    ops = upd["ops"]
     op_types = []
     for j, op in enumerate(ops):
         if not isinstance(op, dict) or "op" not in op:
@@ -68,6 +71,23 @@ def _check_delete(idx, d, errors):
         errors.append(f"{base}: expected object")
         return
     _check_slug(d.get("slug"), f"{base}.slug", errors)
+
+
+def _check_bidir_link(idx, link, errors):
+    base = f"bidirectional_links[{idx}]"
+    if not isinstance(link, dict):
+        errors.append(f"{base}: expected object")
+        return
+    if "a" not in link:
+        errors.append(f"{base}: missing key 'a'")
+    else:
+        _check_slug(link["a"], f"{base}.a", errors)
+    if "b" not in link:
+        errors.append(f"{base}: missing key 'b'")
+    else:
+        _check_slug(link["b"], f"{base}.b", errors)
+    if "a" in link and "b" in link and link["a"] == link["b"]:
+        errors.append(f"{base}: self-loop ({link['a']!r} == {link['b']!r})")
 
 
 def validate(plan):
@@ -104,15 +124,18 @@ def validate(plan):
     # are silently skipped by the CLI (spec line 289) — not a schema error here.
     # Existence-against-wiki is the applier's job.
     for i, link in enumerate(plan["bidirectional_links"]):
-        if not isinstance(link, dict):
-            errors.append(f"bidirectional_links[{i}]: expected object")
-            continue
+        _check_bidir_link(i, link, errors)
 
-    # log_entry.pages_affected must equal the union of touched slugs
+    # log_entry sub-fields and pages_affected consistency
     le = plan["log_entry"]
     if not isinstance(le, dict):
         errors.append("log_entry: expected object")
     else:
+        for required in ("operation", "commit_range", "summary"):
+            if required not in le:
+                errors.append(f"log_entry.{required}: required key missing")
+            elif not isinstance(le[required], str):
+                errors.append(f"log_entry.{required}: must be string")
         actual = set(update_slugs) | set(create_slugs) | set(delete_slugs)
         claimed = set(le.get("pages_affected") or [])
         if actual != claimed:

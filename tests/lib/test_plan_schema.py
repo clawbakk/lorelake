@@ -116,3 +116,67 @@ def test_log_entry_pages_affected_mismatch_rejected(tmp_path):
     rc, _, err = run_validator(p)
     assert rc != 0
     assert "pages_affected" in err
+
+
+def test_update_missing_ops_key_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["updates"] = [{"slug": "good-slug", "rationale": "r"}]  # no `ops`
+    plan["log_entry"]["pages_affected"] = ["good-slug"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "ops" in err and "good-slug" in err
+
+
+def test_bidir_link_missing_a_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["bidirectional_links"] = [{"b": "x"}]  # no `a`
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "bidirectional_links[0]" in err and "'a'" in err
+
+
+def test_bidir_link_missing_b_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["bidirectional_links"] = [{"a": "x"}]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "bidirectional_links[0]" in err and "'b'" in err
+
+
+def test_bidir_link_a_equals_b_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["bidirectional_links"] = [{"a": "x", "b": "x"}]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "bidirectional_links[0]" in err and "self-loop" in err.lower()
+
+
+def test_log_entry_missing_commit_range_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    del plan["log_entry"]["commit_range"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "log_entry.commit_range" in err
+
+
+def test_log_entry_missing_summary_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    del plan["log_entry"]["summary"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "log_entry.summary" in err
+
+
+def test_log_entry_missing_operation_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    del plan["log_entry"]["operation"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "log_entry.operation" in err
