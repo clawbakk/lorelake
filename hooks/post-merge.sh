@@ -167,17 +167,28 @@ if [ "$USE_INGEST_V2" = "1" ]; then
   # shellcheck source=lib/ingest-v2.sh
   source "$LIB_DIR/ingest-v2.sh"
   V2_TIMEOUT=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.timeoutSeconds")
+  # Pre-generate agent ID + dirs + log so the watchdog has them when it fires.
+  V2_AGENT_ID=$(generate_agent_id)
+  V2_AGENT_DIR="$AGENTS_DIR/$V2_AGENT_ID"
+  mkdir -p "$V2_AGENT_DIR"
+  V2_AGENT_LOG="$V2_AGENT_DIR/agent.log"
+  V2_CURRENT_PID_FILE="$V2_AGENT_DIR/orchestrator.pid"
   (
     source "$LIB_DIR/agent-run.sh"
     MY_PID=$(sh -c 'echo $PPID')
+    echo "$MY_PID" > "$V2_CURRENT_PID_FILE"
     HOOKS_LOG_FILE="$LOG_FILE"
+    AGENT_LOG="$V2_AGENT_LOG"
+    CURRENT_PID_FILE="$V2_CURRENT_PID_FILE"
+    MAX_TIMEOUT_SEC="$V2_TIMEOUT"
+    LLAKE_AGENT_ID="$V2_AGENT_ID"
     setup_kill_trap
     (
       sleep "$V2_TIMEOUT"
       if kill -0 "$MY_PID" 2>/dev/null; then kill -USR1 "$MY_PID" 2>/dev/null; fi
     ) &
     WATCHDOG_PID=$!
-    run_ingest_v2
+    run_ingest_v2 "$V2_AGENT_ID" "$V2_AGENT_DIR" "$V2_AGENT_LOG"
     kill "$WATCHDOG_PID" 2>/dev/null
     wait "$WATCHDOG_PID" 2>/dev/null
   ) &

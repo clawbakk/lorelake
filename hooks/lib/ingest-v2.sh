@@ -16,6 +16,12 @@
 #   $INCLUDE_PATHS (bash array)
 
 run_ingest_v2() {
+  # First three positional args are pre-computed by the caller (post-merge.sh)
+  # so the watchdog has visible AGENT_LOG before run_ingest_v2 starts.
+  local AGENT_ID="$1"
+  local AGENT_DIR="$2"
+  local AGENT_LOG="$3"
+
   # --- Read v2 config ---
   local plan_model plan_effort plan_budget plan_tools_json plan_tools
   local fix_model fix_effort fix_budget fix_tools_json fix_tools
@@ -42,12 +48,8 @@ run_ingest_v2() {
     find "$WIKI_ROOT" -type f -name '.*.md.tmp' -delete 2>/dev/null || true
   fi
 
-  # --- Generate agent ID and dirs ---
-  local AGENT_ID AGENT_DIR AGENT_LOG CONTEXT_DIR PLAN_FILE
-  AGENT_ID=$(generate_agent_id)
-  AGENT_DIR="$AGENTS_DIR/$AGENT_ID"
-  mkdir -p "$AGENT_DIR"
-  AGENT_LOG="$AGENT_DIR/agent.log"
+  # AGENT_DIR already exists — caller did mkdir -p before spawning the subshell.
+  local CONTEXT_DIR PLAN_FILE
   CONTEXT_DIR="$AGENT_DIR/context"
   PLAN_FILE="$AGENT_DIR/plan.json"
 
