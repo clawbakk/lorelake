@@ -1,13 +1,54 @@
 #!/usr/bin/env python3
 """LoreLake ingest v2 plan applier.
 
-Reads a validated plan.json and applies it to the wiki. Pure stdlib.
+Reads a validated plan.json and applies it to a project's LoreLake wiki under
+<llake-root>/wiki/. Pure stdlib.
 
-This module is incrementally built up across several tasks. This file currently
-provides only the `replace` op semantics (Task 6). Subsequent tasks add
-append_section, frontmatter ops, body_replace, creates, deletes, and the CLI.
+Public API (importable):
+    apply_replace_ops(content, ops)               — surgical replace ops
+    apply_section_ops(content, ops)               — append_section ops
+    apply_body_replace(content, ops)              — escape-hatch full-body
+    apply_frontmatter_ops(fm_dict, ops)           — frontmatter_* ops
+    apply_update(page_path, update, today, ...)   — one updates[] entry
+    apply_create(wiki_root, create, today, ...)   — one creates[] entry
+    apply_delete(wiki_root, slug, today, ...)     — one deletes[] entry + cascade
+    apply_bidirectional_link(wiki_root, a, b)     — one bidirectional_links[] entry
+    check_write_path(target, llake_root, ...)     — forbidden-write-surface guard
+
+Public exceptions: ApplyError (base), AnchorNotFound, AnchorAmbiguous, EditOverlap,
+HeadingNotFound, AlreadyExists, SlugNotFound, ForbiddenPath. Anything else (OSError,
+UnicodeDecodeError, FrontmatterParseError) is mapped to reason='IOError' or
+'FrontmatterParseError' by _classify_error and lands in failed.json.
+
+CLI:
+    python3 apply_ingest_plan.py --plan PATH --wiki-root PATH --llake-root PATH \\
+        --applied-out PATH --failed-out PATH --today YYYY-MM-DD [--no-log-entry]
+
+Exit codes:
+    0  — applied (with or without per-op failures captured in failed.json)
+    1  — schema-invalid plan or bidir-link existence check failed (cursor held)
+    2  — plan file unreadable / not valid JSON
 """
 
+import argparse
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+# --- Sibling imports (require the lib dir on sys.path; the post-merge hook
+#     invokes this script from a wrapper that sets PYTHONPATH; tests insert
+#     the parent dir before importing.) ---
+_LIB_DIR = Path(__file__).resolve().parent
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+
+import frontmatter
+import plan_schema
+
+
+# --- Exception classes ---
 
 class ApplyError(Exception):
     """Base for all per-op apply errors. Subclasses map to failed.json reasons."""
@@ -26,13 +67,56 @@ class EditOverlap(ApplyError):
     reason = "EditOverlap"
 
 
-import re
+class HeadingNotFound(ApplyError):
+    reason = "HeadingNotFound"
 
+
+class AlreadyExists(ApplyError):
+    reason = "AlreadyExists"
+
+
+class SlugNotFound(ApplyError):
+    reason = "SlugNotFound"
+
+
+class ForbiddenPath(ApplyError):
+    reason = "ForbiddenPath"
+
+
+# --- Constants ---
+
+_FORBIDDEN_SUBTREES = (".state", "schema")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 
 
-class HeadingNotFound(ApplyError):
-    reason = "HeadingNotFound"
+# --- Internal helpers ---
+
+def _atomic_write(path, content):
+    """Write `content` to `path` atomically via a sibling tempfile + os.replace."""
+    parent = os.path.dirname(str(path)) or "."
+    tmp = os.path.join(parent, f".{os.path.basename(str(path))}.tmp")
+    with open(tmp, "w") as f:
+        f.write(content)
+    os.replace(tmp, str(path))
+
+
+def _walk_wiki_pages(wiki_root):
+    """Yield every wiki page file EXCEPT those under wiki_root/discussions/.
+
+    Discussions are owned by session-capture (CLAUDE.md three-writer model);
+    ingest must never read them as scrub/index targets. Tests pin this.
+    Skips non-files (directories named X.md, dangling symlinks, etc.).
+    """
+    for page in wiki_root.rglob("*.md"):
+        if not page.is_file():
+            continue
+        try:
+            rel_parts = page.relative_to(wiki_root).parts
+        except ValueError:
+            continue
+        if rel_parts and rel_parts[0] == "discussions":
+            continue
+        yield page
 
 
 def _heading_level(line):
@@ -59,6 +143,112 @@ def _find_section_end(text, heading_start, heading_level):
             return len(text)
         pos = next_line_end + 1
     return len(text)
+
+
+def _resolve_slug_path(wiki_root, slug):
+    matches = [p for p in _walk_wiki_pages(wiki_root) if p.name == f"{slug}.md"]
+    if not matches:
+        raise SlugNotFound(f"slug not found in wiki: {slug}")
+    matches.sort()
+    return matches[0]
+
+
+def _ensure_related_contains(page_path, token):
+    text = page_path.read_text()
+    fm_text, body = frontmatter.split(text)
+    fm_dict = frontmatter.parse(fm_text) if fm_text else {}
+    related = list(fm_dict.get("related") or [])
+    if token not in related:
+        related.append(token)
+        fm_dict["related"] = related
+        new_text = "---\n" + frontmatter.serialize(fm_dict) + "---\n" + body
+        _atomic_write(page_path, new_text)
+
+
+def _scrub_related(wiki_root, deleted_slug):
+    """Remove `deleted_slug` from every wiki page's frontmatter `related:` list.
+    Idempotent. Returns count of pages modified."""
+    target_token = f"[[{deleted_slug}]]"
+    count = 0
+    for page in _walk_wiki_pages(wiki_root):
+        try:
+            text = page.read_text()
+        except (IOError, OSError):
+            continue
+        fm_text, body = frontmatter.split(text)
+        if not fm_text:
+            continue
+        try:
+            fm_dict = frontmatter.parse(fm_text)
+        except frontmatter.FrontmatterParseError:
+            continue
+        related = fm_dict.get("related") or []
+        if target_token not in related:
+            continue
+        fm_dict["related"] = [r for r in related if r != target_token]
+        new_text = "---\n" + frontmatter.serialize(fm_dict) + "---\n" + body
+        _atomic_write(page, new_text)
+        count += 1
+    return count
+
+
+def _scan_inline_links(wiki_root, deleted_slug):
+    """Return a list of {slug, page, line, line_text} for every body occurrence
+    of [[<deleted_slug>]]."""
+    pattern = re.compile(r"\[\[" + re.escape(deleted_slug) + r"\]\]")
+    out = []
+    for page in _walk_wiki_pages(wiki_root):
+        try:
+            text = page.read_text()
+        except (IOError, OSError):
+            continue
+        _, body = frontmatter.split(text)
+        for lineno, line in enumerate(body.splitlines(), start=1):
+            if pattern.search(line):
+                # Multiple matches on the same line still surface as one entry per match.
+                for _ in pattern.findall(line):
+                    out.append({
+                        "slug": deleted_slug,
+                        "page": str(page),
+                        "line": lineno,
+                        "line_text": line,
+                    })
+    return out
+
+
+# --- Per-op functions ---
+
+def apply_replace_ops(original, ops):
+    """Apply a list of {op: replace, find, with} ops to `original` content.
+
+    Anchors are resolved against the ORIGINAL (not the running result), then
+    applied in reverse-position order so offsets don't shift.
+
+    Raises:
+        AnchorNotFound — a `find` doesn't appear in the original.
+        AnchorAmbiguous — a `find` appears more than once.
+        EditOverlap — two anchors share any bytes in the original.
+    """
+    spans = []
+    for op in ops:
+        if op.get("op") != "replace":
+            continue
+        anchor = op["find"]
+        count = original.count(anchor)
+        if count == 0:
+            raise AnchorNotFound(f"anchor not found: {anchor!r}")
+        if count > 1:
+            raise AnchorAmbiguous(f"anchor appears {count} times (must be unique): {anchor!r}")
+        idx = original.find(anchor)
+        spans.append((idx, idx + len(anchor), op["with"]))
+    spans.sort(key=lambda s: s[0])
+    for (s1, e1, _), (s2, _, _) in zip(spans, spans[1:]):
+        if e1 > s2:
+            raise EditOverlap(f"overlap between span ending at {e1} and span starting at {s2}")
+    result = original
+    for start, end, replacement in reversed(spans):
+        result = result[:start] + replacement + result[end:]
+    return result
 
 
 def apply_section_ops(content, ops):
@@ -95,17 +285,6 @@ def apply_body_replace(content, ops):
     return content
 
 
-import sys as _sys_bootstrap
-from pathlib import Path as _Path_bootstrap
-_LIB_DIR = _Path_bootstrap(__file__).resolve().parent
-if str(_LIB_DIR) not in _sys_bootstrap.path:
-    _sys_bootstrap.path.insert(0, str(_LIB_DIR))
-del _sys_bootstrap, _Path_bootstrap, _LIB_DIR
-
-import os
-import frontmatter
-
-
 def apply_frontmatter_ops(fm_dict, ops):
     """Return a new dict with frontmatter_* ops applied. Idempotent for add_related."""
     out = dict(fm_dict)
@@ -122,14 +301,7 @@ def apply_frontmatter_ops(fm_dict, ops):
     return out
 
 
-def _atomic_write(path, content):
-    """Write `content` to `path` atomically via a sibling tempfile + os.replace."""
-    parent = os.path.dirname(str(path)) or "."
-    tmp = os.path.join(parent, f".{os.path.basename(str(path))}.tmp")
-    with open(tmp, "w") as f:
-        f.write(content)
-    os.replace(tmp, str(path))
-
+# --- Per-update orchestration ---
 
 def apply_update(page_path, update, today, llake_root=None, wiki_root=None):
     """Apply a single `updates[]` entry to `page_path` atomically.
@@ -162,15 +334,54 @@ def apply_update(page_path, update, today, llake_root=None, wiki_root=None):
     _atomic_write(page_path, new_text)
 
 
-import re as _re
+def apply_create(wiki_root, create, today, llake_root=None):
+    """Write a new wiki page under <wiki_root>/<category>/<slug>.md."""
+    target = wiki_root / create["category"] / f"{create['slug']}.md"
+    if llake_root is not None:
+        check_write_path(target, llake_root, wiki_root)
+    if target.exists():
+        raise AlreadyExists(f"target already exists: {target}")
+    fm = dict(create["front_matter"])
+    fm["updated"] = today
+    text = "---\n" + frontmatter.serialize(fm) + "---\n" + create["body"]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(target, text)
 
 
-class ForbiddenPath(ApplyError):
-    reason = "ForbiddenPath"
+def apply_delete(wiki_root, slug, today, llake_root=None):
+    """Remove the page for `slug` from the wiki. Returns a dict describing what happened.
+
+    On no-op (target absent): returns {"note": "target_already_absent", "dangling_inline_links": []}.
+    On real delete: returns {"dangling_inline_links": [...]}; cascades scrub the slug
+    from every other page's `related:` and surface inline [[slug]] mentions as warnings.
+    """
+    # Resolve the page by walking the wiki for <slug>.md.
+    matches = [p for p in _walk_wiki_pages(wiki_root) if p.name == f"{slug}.md"]
+    if not matches:
+        return {"note": "target_already_absent", "dangling_inline_links": []}
+    if len(matches) > 1:
+        # Two pages with the same slug is a wiki integrity bug, but not the applier's
+        # to resolve. Pick the first deterministically and surface in the result.
+        matches.sort()
+    target = matches[0]
+    if llake_root is not None:
+        check_write_path(target, llake_root, wiki_root)
+    target.unlink()
+    _scrub_related(wiki_root, slug)
+    inline = _scan_inline_links(wiki_root, slug)
+    return {"dangling_inline_links": inline}
 
 
-_FORBIDDEN_SUBTREES = (".state", "schema")
+def apply_bidirectional_link(wiki_root, slug_a, slug_b):
+    """Ensure page_a's related: contains [[b]] and page_b's contains [[a]].
+    Idempotent. Raises SlugNotFound if either page is missing."""
+    a_path = _resolve_slug_path(wiki_root, slug_a)
+    b_path = _resolve_slug_path(wiki_root, slug_b)
+    _ensure_related_contains(a_path, f"[[{slug_b}]]")
+    _ensure_related_contains(b_path, f"[[{slug_a}]]")
 
+
+# --- Path-guard ---
 
 def check_write_path(target, llake_root, wiki_root, allow_log_md=False):
     """Raise ForbiddenPath unless `target` is a permitted destination.
@@ -211,162 +422,7 @@ def check_write_path(target, llake_root, wiki_root, allow_log_md=False):
         raise ForbiddenPath("wiki/discussions/** is owned by session-capture")
 
 
-class AlreadyExists(ApplyError):
-    reason = "AlreadyExists"
-
-
-class DeleteTargetMissing(ApplyError):
-    """Raised internally; converted to a no-op success at the orchestration layer."""
-    reason = "DeleteTargetMissing"
-
-
-def apply_create(wiki_root, create, today, llake_root=None):
-    """Write a new wiki page under <wiki_root>/<category>/<slug>.md."""
-    target = wiki_root / create["category"] / f"{create['slug']}.md"
-    if llake_root is not None:
-        check_write_path(target, llake_root, wiki_root)
-    if target.exists():
-        raise AlreadyExists(f"target already exists: {target}")
-    fm = dict(create["front_matter"])
-    fm["updated"] = today
-    text = "---\n" + frontmatter.serialize(fm) + "---\n" + create["body"]
-    target.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write(target, text)
-
-
-def _walk_wiki_pages(wiki_root):
-    """Yield every wiki page file EXCEPT those under wiki_root/discussions/.
-
-    Discussions are owned by session-capture (CLAUDE.md three-writer model);
-    ingest must never read them as scrub/index targets. Tests pin this.
-    Skips non-files (directories named X.md, dangling symlinks, etc.).
-    """
-    for page in wiki_root.rglob("*.md"):
-        if not page.is_file():
-            continue
-        try:
-            rel_parts = page.relative_to(wiki_root).parts
-        except ValueError:
-            continue
-        if rel_parts and rel_parts[0] == "discussions":
-            continue
-        yield page
-
-
-def _scrub_related(wiki_root, deleted_slug):
-    """Remove `deleted_slug` from every wiki page's frontmatter `related:` list.
-    Idempotent. Returns count of pages modified."""
-    target_token = f"[[{deleted_slug}]]"
-    count = 0
-    for page in _walk_wiki_pages(wiki_root):
-        try:
-            text = page.read_text()
-        except (IOError, OSError):
-            continue
-        fm_text, body = frontmatter.split(text)
-        if not fm_text:
-            continue
-        try:
-            fm_dict = frontmatter.parse(fm_text)
-        except frontmatter.FrontmatterParseError:
-            continue
-        related = fm_dict.get("related") or []
-        if target_token not in related:
-            continue
-        fm_dict["related"] = [r for r in related if r != target_token]
-        new_text = "---\n" + frontmatter.serialize(fm_dict) + "---\n" + body
-        _atomic_write(page, new_text)
-        count += 1
-    return count
-
-
-def _scan_inline_links(wiki_root, deleted_slug):
-    """Return a list of {slug, page, line, line_text} for every body occurrence
-    of [[<deleted_slug>]]."""
-    pattern = _re.compile(r"\[\[" + _re.escape(deleted_slug) + r"\]\]")
-    out = []
-    for page in _walk_wiki_pages(wiki_root):
-        try:
-            text = page.read_text()
-        except (IOError, OSError):
-            continue
-        _, body = frontmatter.split(text)
-        for lineno, line in enumerate(body.splitlines(), start=1):
-            if pattern.search(line):
-                # Multiple matches on the same line still surface as one entry per match.
-                for _ in pattern.findall(line):
-                    out.append({
-                        "slug": deleted_slug,
-                        "page": str(page),
-                        "line": lineno,
-                        "line_text": line,
-                    })
-    return out
-
-
-def apply_delete(wiki_root, slug, today, llake_root=None):
-    """Remove the page for `slug` from the wiki. Returns a dict describing what happened.
-
-    On no-op (target absent): returns {"note": "target_already_absent", "dangling_inline_links": []}.
-    On real delete: returns {"dangling_inline_links": [...]}; cascades scrub the slug
-    from every other page's `related:` and surface inline [[slug]] mentions as warnings.
-    """
-    # Resolve the page by walking the wiki for <slug>.md.
-    matches = [p for p in _walk_wiki_pages(wiki_root) if p.name == f"{slug}.md"]
-    if not matches:
-        return {"note": "target_already_absent", "dangling_inline_links": []}
-    if len(matches) > 1:
-        # Two pages with the same slug is a wiki integrity bug, but not the applier's
-        # to resolve. Pick the first deterministically and surface in the result.
-        matches.sort()
-    target = matches[0]
-    if llake_root is not None:
-        check_write_path(target, llake_root, wiki_root)
-    target.unlink()
-    _scrub_related(wiki_root, slug)
-    inline = _scan_inline_links(wiki_root, slug)
-    return {"dangling_inline_links": inline}
-
-
-class SlugNotFound(ApplyError):
-    reason = "SlugNotFound"
-
-
-def _resolve_slug_path(wiki_root, slug):
-    matches = [p for p in _walk_wiki_pages(wiki_root) if p.name == f"{slug}.md"]
-    if not matches:
-        raise SlugNotFound(f"slug not found in wiki: {slug}")
-    matches.sort()
-    return matches[0]
-
-
-def _ensure_related_contains(page_path, token):
-    text = page_path.read_text()
-    fm_text, body = frontmatter.split(text)
-    fm_dict = frontmatter.parse(fm_text) if fm_text else {}
-    related = list(fm_dict.get("related") or [])
-    if token not in related:
-        related.append(token)
-        fm_dict["related"] = related
-        new_text = "---\n" + frontmatter.serialize(fm_dict) + "---\n" + body
-        _atomic_write(page_path, new_text)
-
-
-def apply_bidirectional_link(wiki_root, slug_a, slug_b):
-    """Ensure page_a's related: contains [[b]] and page_b's contains [[a]].
-    Idempotent. Raises SlugNotFound if either page is missing."""
-    a_path = _resolve_slug_path(wiki_root, slug_a)
-    b_path = _resolve_slug_path(wiki_root, slug_b)
-    _ensure_related_contains(a_path, f"[[{slug_b}]]")
-    _ensure_related_contains(b_path, f"[[{slug_a}]]")
-
-
-import argparse
-import json as _json_mod
-import sys as _sys
-import plan_schema as _plan_schema
-from pathlib import Path as _Path
-
+# --- Internal CLI helpers ---
 
 def _classify_error(exc):
     """Map an exception to the failed.json `reason` string. Per spec line 525,
@@ -422,20 +478,20 @@ def main():
                          "invocation so a single ingest run produces a single log entry.")
     args = ap.parse_args()
 
-    llake_root = _Path(args.llake_root)
-    wiki_root = _Path(args.wiki_root)
+    llake_root = Path(args.llake_root)
+    wiki_root = Path(args.wiki_root)
 
     try:
-        plan = _json_mod.loads(_Path(args.plan).read_text())
-    except (IOError, _json_mod.JSONDecodeError) as e:
-        print(f"apply_ingest_plan: cannot read/parse plan {args.plan}: {e}", file=_sys.stderr)
-        _sys.exit(2)
+        plan = json.loads(Path(args.plan).read_text())
+    except (IOError, json.JSONDecodeError) as e:
+        print(f"apply_ingest_plan: cannot read/parse plan {args.plan}: {e}", file=sys.stderr)
+        sys.exit(2)
 
-    schema_errors = _plan_schema.validate(plan)
+    schema_errors = plan_schema.validate(plan)
     if schema_errors:
         for e in schema_errors:
-            print(e, file=_sys.stderr)
-        _sys.exit(1)
+            print(e, file=sys.stderr)
+        sys.exit(1)
 
     # Bidirectional-link existence check (treated as schema-level — cursor held on
     # failure). The plan_schema validator can't see the wiki; the CLI can.
@@ -451,13 +507,13 @@ def main():
                 )
     if ref_errors:
         for e in ref_errors:
-            print(e, file=_sys.stderr)
-        _sys.exit(1)
+            print(e, file=sys.stderr)
+        sys.exit(1)
 
     if plan.get("skip_reason"):
-        _Path(args.applied_out).write_text(_json_mod.dumps(
+        Path(args.applied_out).write_text(json.dumps(
             {"updates": [], "creates": [], "deletes": [], "bidirectional_links": []}))
-        _Path(args.failed_out).write_text("[]")
+        Path(args.failed_out).write_text("[]")
         if not args.no_log_entry:
             _append_log_entry(llake_root, args.today, plan["log_entry"],
                               has_failures=False, skip_reason=plan["skip_reason"])
@@ -511,8 +567,8 @@ def main():
             failed.append({"slug": f"{link['a']}<->{link['b']}",
                            "reason": _classify_error(e), "detail": str(e)})
 
-    _Path(args.applied_out).write_text(_json_mod.dumps(applied, indent=2))
-    _Path(args.failed_out).write_text(_json_mod.dumps(failed, indent=2))
+    Path(args.applied_out).write_text(json.dumps(applied, indent=2))
+    Path(args.failed_out).write_text(json.dumps(failed, indent=2))
 
     if not args.no_log_entry:
         _append_log_entry(llake_root, args.today, plan["log_entry"],
@@ -520,38 +576,5 @@ def main():
     return 0
 
 
-def apply_replace_ops(original, ops):
-    """Apply a list of {op: replace, find, with} ops to `original` content.
-
-    Anchors are resolved against the ORIGINAL (not the running result), then
-    applied in reverse-position order so offsets don't shift.
-
-    Raises:
-        AnchorNotFound — a `find` doesn't appear in the original.
-        AnchorAmbiguous — a `find` appears more than once.
-        EditOverlap — two anchors share any bytes in the original.
-    """
-    spans = []
-    for op in ops:
-        if op.get("op") != "replace":
-            continue
-        anchor = op["find"]
-        count = original.count(anchor)
-        if count == 0:
-            raise AnchorNotFound(f"anchor not found: {anchor!r}")
-        if count > 1:
-            raise AnchorAmbiguous(f"anchor appears {count} times (must be unique): {anchor!r}")
-        idx = original.find(anchor)
-        spans.append((idx, idx + len(anchor), op["with"]))
-    spans.sort(key=lambda s: s[0])
-    for (s1, e1, _), (s2, _, _) in zip(spans, spans[1:]):
-        if e1 > s2:
-            raise EditOverlap(f"overlap between span ending at {e1} and span starting at {s2}")
-    result = original
-    for start, end, replacement in reversed(spans):
-        result = result[:start] + replacement + result[end:]
-    return result
-
-
-if __name__ == '__main__':
-    _sys.exit(main())
+if __name__ == "__main__":
+    sys.exit(main())
