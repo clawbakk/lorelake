@@ -1,10 +1,15 @@
 """Tests for build_ingest_context.py — Stage 1 of ingest v2."""
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "hooks" / "lib" / "build_ingest_context.py"
+LIB_DIR = REPO_ROOT / "hooks" / "lib"
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
+import build_ingest_context as bic
 
 
 def _git(repo, *args):
@@ -166,3 +171,26 @@ def test_wiki_index_handles_pages_without_frontmatter(tmp_path):
     assert "bare" in idx
     assert idx["bare"]["title"] == "bare"  # falls back to slug
     assert idx["bare"]["related"] == []
+
+
+def test_churn_score_weights_commits_more_than_lines():
+    # Same total lines (100), different commit counts
+    high = bic.churn_score({"commits": 5, "added": 50, "removed": 50})
+    low = bic.churn_score({"commits": 1, "added": 50, "removed": 50})
+    assert high > low
+    # commits dominates: 5 commits worth of weight (50) plus log-dampened lines
+    # should exceed 1 commit + same lines
+    assert high - low >= 35
+
+
+def test_churn_score_log_dampens_line_blowup():
+    # A single commit with massive lines should NOT outscore a multi-touch file
+    multi = bic.churn_score({"commits": 4, "added": 100, "removed": 50})
+    big_one = bic.churn_score({"commits": 1, "added": 5000, "removed": 0})
+    assert multi > big_one
+
+
+def test_churn_score_zero_lines_handled():
+    # Edge: no line activity, only metadata-noise commits — still has a score
+    s = bic.churn_score({"commits": 1, "added": 0, "removed": 0})
+    assert s > 0

@@ -10,6 +10,7 @@ Pure stdlib. Exits nonzero on git/IO error.
 """
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -166,6 +167,24 @@ def write_per_file_diffs(repo, files, last, current, out_dir, chunk_bytes):
             names.append(name)
         (diffs_dir / f"{safe}.index.json").write_text(
             json.dumps({"file": path, "chunks": names}, indent=2))
+
+
+def churn_score(stats):
+    """Composite churn score for a single file.
+
+    Weights commits-touching heavily — a file in 5 separate commits is
+    almost certainly evolving. Line counts are log-dampened so a single
+    monster patch doesn't dominate.
+
+    Args:
+        stats: dict with at least 'commits' (int), 'added' (int), 'removed' (int).
+    Returns:
+        float score; larger means higher priority for forced reading.
+    """
+    commits = stats.get("commits", 0)
+    added = stats.get("added", 0)
+    removed = stats.get("removed", 0)
+    return commits * 10 + math.log1p(added + removed)
 
 
 def main():
