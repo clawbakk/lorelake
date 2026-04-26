@@ -30,12 +30,21 @@ run_ingest_v2() {
   plan_effort=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.plannerEffort")
   plan_budget=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.plannerBudgetUsd")
   plan_tools_json=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.plannerAllowedTools")
-  plan_tools=$(python3 -c "import json,sys; print(','.join(json.loads(sys.argv[1])))" "$plan_tools_json" 2>/dev/null || echo "Read,Glob,Grep")
+  plan_tools=$(python3 -c "import json,sys; print(','.join(json.loads(sys.argv[1])))" "$plan_tools_json")
+  if [ -z "$plan_tools" ]; then
+    echo "ingest-v2: ingest.v2.plannerAllowedTools is missing or malformed" >&2
+    echo "ingest-v2: cannot proceed without a known tool allowlist (refusing to run with empty)" >&2
+    return 1
+  fi
   fix_model=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.fixerModel")
   fix_effort=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.fixerEffort")
   fix_budget=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.fixerBudgetUsd")
   fix_tools_json=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.fixerAllowedTools")
-  fix_tools=$(python3 -c "import json,sys; print(','.join(json.loads(sys.argv[1])))" "$fix_tools_json" 2>/dev/null || echo "Read,Glob,Grep")
+  fix_tools=$(python3 -c "import json,sys; print(','.join(json.loads(sys.argv[1])))" "$fix_tools_json")
+  if [ -z "$fix_tools" ]; then
+    echo "ingest-v2: ingest.v2.fixerAllowedTools is missing or malformed" >&2
+    return 1
+  fi
   max_retries=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.maxFixerRetries")
   diff_chunk_bytes=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.diffChunkBytes")
   v2_timeout=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.timeoutSeconds")
@@ -110,8 +119,13 @@ EOF
   echo "" >> "$AGENT_LOG"
   echo "=== INGEST V2 PLANNER (${AGENT_ID}_planner) ===" >> "$AGENT_LOG"
 
+  local PLAN_MODEL_FLAG=""
+  if [ -n "$plan_model" ]; then PLAN_MODEL_FLAG="--model $plan_model"; fi
+  local PLAN_EFFORT_FLAG=""
+  if [ -n "$plan_effort" ]; then PLAN_EFFORT_FLAG="--effort $plan_effort"; fi
+
   IS_LLAKE_AGENT=true LLAKE_AGENT_ID="${AGENT_ID}_planner" \
-    claude --model "$plan_model" --effort "$plan_effort" \
+    claude $PLAN_MODEL_FLAG $PLAN_EFFORT_FLAG \
     -p "$PLANNER_PROMPT" \
     --tools "$plan_tools" \
     --allowedTools "$plan_tools" \
@@ -241,9 +255,14 @@ print('\n'.join(out))
   fi
   rm -f "$FIXER_RENDER_ERR"
 
+  local FIX_MODEL_FLAG=""
+  if [ -n "$fix_model" ]; then FIX_MODEL_FLAG="--model $fix_model"; fi
+  local FIX_EFFORT_FLAG=""
+  if [ -n "$fix_effort" ]; then FIX_EFFORT_FLAG="--effort $fix_effort"; fi
+
   local FIX_PLAN="$AGENT_DIR/fix-plan.json"
   IS_LLAKE_AGENT=true LLAKE_AGENT_ID="${AGENT_ID}_fixer" \
-    claude --model "$fix_model" --effort "$fix_effort" \
+    claude $FIX_MODEL_FLAG $FIX_EFFORT_FLAG \
     -p "$FIXER_PROMPT" \
     --tools "$fix_tools" \
     --allowedTools "$fix_tools" \
