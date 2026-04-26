@@ -38,6 +38,8 @@ source "$LIB_DIR/constants.sh"
 source "$LIB_DIR/agent-id.sh"
 # shellcheck source=/dev/null
 source "$LIB_DIR/hook-log.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/post-merge-lock.sh"
 
 # post-merge fires inside a git repo by definition.
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
@@ -75,6 +77,15 @@ INGEST_ENABLED=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.enable
 if [ "$INGEST_ENABLED" = "false" ]; then
   hook_end "skipped: ingest disabled" "$LOG_FILE"
   exit 0
+fi
+
+# Pipeline switch — v2 hands off to a separate orchestrator after the shared
+# setup completes (SHA range, INCLUDE_PATHS array, branch validation). Default
+# "legacy" falls through to the existing implementation below unchanged.
+INGEST_PIPELINE=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.pipeline")
+USE_INGEST_V2=0
+if [ "$INGEST_PIPELINE" = "v2" ]; then
+  USE_INGEST_V2=1
 fi
 
 # Read ingest settings from config
@@ -148,6 +159,54 @@ if ! git -C "$PROJECT_ROOT" log --oneline "$LAST_SHA..$CURRENT_SHA" > /dev/null 
   # If the range is invalid (e.g., force push), reset to current HEAD
   echo "$CURRENT_SHA" > "$SHA_FILE"
   hook_end "skipped: invalid range, reset SHA to $CURRENT_SHA" "$LOG_FILE"
+  exit 0
+fi
+
+# v2 branch: hand off to the v2 orchestrator before legacy setup runs.
+# v2 owns its own agent ID, dirs, watchdog, prompt rendering, and finalize —
+# nothing below this branch executes when pipeline == "v2".
+if [ "$USE_INGEST_V2" = "1" ]; then
+  # shellcheck source=lib/ingest-v2.sh
+  source "$LIB_DIR/ingest-v2.sh"
+  V2_TIMEOUT=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.timeoutSeconds")
+  # Pre-generate agent ID + dirs + log so the watchdog has them when it fires.
+  V2_AGENT_ID=$(generate_agent_id)
+  V2_AGENT_DIR="$AGENTS_DIR/$V2_AGENT_ID"
+  mkdir -p "$V2_AGENT_DIR"
+  V2_AGENT_LOG="$V2_AGENT_DIR/agent.log"
+  V2_CURRENT_PID_FILE="$V2_AGENT_DIR/orchestrator.pid"
+  (
+    source "$LIB_DIR/agent-run.sh"
+    MY_PID=$(sh -c 'echo $PPID')
+    echo "$MY_PID" > "$V2_CURRENT_PID_FILE"
+    HOOKS_LOG_FILE="$LOG_FILE"
+    AGENT_LOG="$V2_AGENT_LOG"
+    CURRENT_PID_FILE="$V2_CURRENT_PID_FILE"
+    MAX_TIMEOUT_SEC="$V2_TIMEOUT"
+    LLAKE_AGENT_ID="$V2_AGENT_ID"
+    setup_kill_trap
+    if ! acquire_post_merge_lock; then
+      printf "%s | %-13s | skipped: post-merge lock held; v2 agent abandoned\n" \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" >> "$LOG_FILE"
+      exit 0
+    fi
+    trap 'release_post_merge_lock' EXIT
+    (
+      sleep "$V2_TIMEOUT"
+      if kill -0 "$MY_PID" 2>/dev/null; then kill -USR1 "$MY_PID" 2>/dev/null; fi
+    ) &
+    WATCHDOG_PID=$!
+    run_ingest_v2 "$V2_AGENT_ID" "$V2_AGENT_DIR" "$V2_AGENT_LOG"
+    kill "$WATCHDOG_PID" 2>/dev/null
+    wait "$WATCHDOG_PID" 2>/dev/null
+  ) &
+  BG_PID=$!
+  if [ "${LLAKE_POST_MERGE_SYNC:-}" = "1" ]; then
+    wait "$BG_PID" 2>/dev/null
+  else
+    disown "$BG_PID"
+  fi
+  hook_end "done: spawned v2 agent (range: $COMMIT_RANGE, timeout: ${V2_TIMEOUT}s)" "$LOG_FILE"
   exit 0
 fi
 
@@ -229,6 +288,12 @@ rm -f "$RENDER_STDERR_FILE"
   CURRENT_PID_FILE="$AGENT_DIR/ingest.pid"
   echo "$MY_PID" > "$CURRENT_PID_FILE"
   setup_kill_trap
+  if ! acquire_post_merge_lock; then
+    printf "%s | %-13s | skipped: post-merge lock held; legacy agent abandoned\n" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" >> "$LOG_FILE"
+    exit 0
+  fi
+  trap 'release_post_merge_lock' EXIT
 
   # Single watchdog: sends USR1 to the outer subshell, triggering the trap's
   # timeout path for a full tree-kill.

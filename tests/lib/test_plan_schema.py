@@ -1,0 +1,182 @@
+"""Tests for plan_schema.py — validates ingest v2 plan.json files."""
+import json
+import subprocess
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = REPO_ROOT / "hooks" / "lib" / "plan_schema.py"
+
+
+def run_validator(plan_path):
+    cmd = ["python3", str(SCRIPT), str(plan_path)]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.returncode, result.stdout, result.stderr
+
+
+def write_plan(tmp_path, plan):
+    p = tmp_path / "plan.json"
+    p.write_text(json.dumps(plan))
+    return p
+
+
+MINIMAL_VALID_PLAN = {
+    "version": "1",
+    "skip_reason": None,
+    "summary": "trivial",
+    "updates": [],
+    "creates": [],
+    "deletes": [],
+    "bidirectional_links": [],
+    "log_entry": {
+        "operation": "ingest",
+        "commit_range": "abc1234..def5678",
+        "summary": "trivial",
+        "pages_affected": []
+    }
+}
+
+
+def test_minimal_valid_plan_passes(tmp_path):
+    p = write_plan(tmp_path, MINIMAL_VALID_PLAN)
+    rc, out, err = run_validator(p)
+    assert rc == 0, f"stderr: {err}"
+
+
+def test_missing_version_fails(tmp_path):
+    plan = dict(MINIMAL_VALID_PLAN)
+    del plan["version"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "version" in err
+
+
+def with_update(slug, ops):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["updates"] = [{"slug": slug, "rationale": "r", "ops": ops}]
+    plan["log_entry"]["pages_affected"] = [slug]
+    return plan
+
+
+def test_invalid_slug_rejected(tmp_path):
+    plan = with_update("Bad Slug!", [{"op": "body_replace", "content": "x"}])
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "slug" in err.lower()
+
+
+def test_unknown_op_type_rejected(tmp_path):
+    plan = with_update("good-slug", [{"op": "frobnicate", "find": "x", "with": "y"}])
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "frobnicate" in err or "op" in err.lower()
+
+
+def test_body_replace_and_replace_in_same_update_rejected(tmp_path):
+    plan = with_update("good-slug", [
+        {"op": "replace", "find": "a", "with": "b"},
+        {"op": "body_replace", "content": "x"}
+    ])
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "body_replace" in err and "replace" in err
+
+
+def test_slug_in_two_buckets_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["updates"] = [{"slug": "x", "rationale": "r", "ops": [{"op": "body_replace", "content": "y"}]}]
+    plan["deletes"] = [{"slug": "x", "rationale": "r"}]
+    plan["log_entry"]["pages_affected"] = ["x"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "x" in err and ("updates" in err or "deletes" in err)
+
+
+def test_bidirectional_link_to_deleted_slug_is_valid(tmp_path):
+    # Links where one side is in deletes[] are silently skipped by the CLI
+    # (spec line 289: "silently skip bidirectional_links where either side is in deletes[]").
+    # The validator allows these — existence checks are the applier's job.
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["deletes"] = [{"slug": "x", "rationale": "r"}]
+    plan["bidirectional_links"] = [{"a": "x", "b": "y"}]
+    plan["log_entry"]["pages_affected"] = ["x"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc == 0, f"expected valid plan; stderr: {err}"
+
+
+def test_log_entry_pages_affected_mismatch_rejected(tmp_path):
+    plan = with_update("good-slug", [{"op": "body_replace", "content": "x"}])
+    plan["log_entry"]["pages_affected"] = ["different-slug"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "pages_affected" in err
+
+
+def test_update_missing_ops_key_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["updates"] = [{"slug": "good-slug", "rationale": "r"}]  # no `ops`
+    plan["log_entry"]["pages_affected"] = ["good-slug"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "ops" in err and "good-slug" in err
+
+
+def test_bidir_link_missing_a_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["bidirectional_links"] = [{"b": "x"}]  # no `a`
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "bidirectional_links[0]" in err and "'a'" in err
+
+
+def test_bidir_link_missing_b_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["bidirectional_links"] = [{"a": "x"}]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "bidirectional_links[0]" in err and "'b'" in err
+
+
+def test_bidir_link_a_equals_b_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["bidirectional_links"] = [{"a": "x", "b": "x"}]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "bidirectional_links[0]" in err and "self-loop" in err.lower()
+
+
+def test_log_entry_missing_commit_range_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    del plan["log_entry"]["commit_range"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "log_entry.commit_range" in err
+
+
+def test_log_entry_missing_summary_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    del plan["log_entry"]["summary"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "log_entry.summary" in err
+
+
+def test_log_entry_missing_operation_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    del plan["log_entry"]["operation"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "log_entry.operation" in err

@@ -20,6 +20,46 @@
 # controls outcome entirely via env vars.
 set -u
 
+# v2-aware mode for ingest pipeline v2 tests.
+#   LLAKE_STUB_MODE=ingest-v2-planner | ingest-v2-fixer
+#   LLAKE_STUB_PLAN_JSON     — path to a file whose contents become the result
+#   LLAKE_STUB_PLAN_INLINE   — literal JSON to emit as the result
+#   LLAKE_STUB_PLAN_INLINE_1 — literal JSON for the 1st invocation (planner pass)
+#   LLAKE_STUB_PLAN_INLINE_2 — literal JSON for the 2nd invocation (fixer pass)
+#   LLAKE_STUB_CALL_COUNTER  — file used to count invocations across calls
+#   LLAKE_STUB_SLEEP_SECONDS — sleep N seconds before exiting (for timeout tests)
+if [ "${LLAKE_STUB_MODE:-}" = "ingest-v2-planner" ] || [ "${LLAKE_STUB_MODE:-}" = "ingest-v2-fixer" ]; then
+  # Multi-call counter — supports different plans for call 1 vs call 2
+  COUNTER_FILE="${LLAKE_STUB_CALL_COUNTER:-/tmp/llake-stub-counter-$$}"
+  CALL_NUM=$(if [ -f "$COUNTER_FILE" ]; then cat "$COUNTER_FILE"; else echo 0; fi)
+  CALL_NUM=$((CALL_NUM + 1))
+  echo "$CALL_NUM" > "$COUNTER_FILE"
+
+  PLAN_TEXT=""
+  if [ -n "${LLAKE_STUB_PLAN_JSON:-}" ] && [ -f "${LLAKE_STUB_PLAN_JSON:-}" ]; then
+    PLAN_TEXT=$(cat "$LLAKE_STUB_PLAN_JSON")
+  elif [ "$CALL_NUM" = "1" ] && [ -n "${LLAKE_STUB_PLAN_INLINE_1:-}" ]; then
+    PLAN_TEXT="$LLAKE_STUB_PLAN_INLINE_1"
+  elif [ "$CALL_NUM" = "2" ] && [ -n "${LLAKE_STUB_PLAN_INLINE_2:-}" ]; then
+    PLAN_TEXT="$LLAKE_STUB_PLAN_INLINE_2"
+  elif [ -n "${LLAKE_STUB_PLAN_INLINE:-}" ]; then
+    PLAN_TEXT="$LLAKE_STUB_PLAN_INLINE"
+  elif [ -n "${LLAKE_STUB_PLAN_INLINE_1:-}" ]; then
+    PLAN_TEXT="$LLAKE_STUB_PLAN_INLINE_1"
+  fi
+  # Emit a system init event so format-agent-log shows an INIT line.
+  printf '%s\n' '{"type":"system","subtype":"init","session_id":"stub","model":"stub","tools":[]}'
+  # Encode plan text as a JSON string, then embed it into both an assistant
+  # message and a result event. The result event is what --extract-result reads.
+  PLAN_ESCAPED=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$PLAN_TEXT")
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":$PLAN_ESCAPED}]}}"
+  printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"total_cost_usd\":0.10,\"result\":$PLAN_ESCAPED}"
+  if [ -n "${LLAKE_STUB_SLEEP_SECONDS:-}" ] && [ "$LLAKE_STUB_SLEEP_SECONDS" -gt 0 ] 2>/dev/null; then
+    sleep "$LLAKE_STUB_SLEEP_SECONDS"
+  fi
+  exit 0
+fi
+
 # Resolve which call this is, if multi-call mode is active.
 CALL_N=""
 if [ -n "${STUB_COUNT_FILE:-}" ]; then
