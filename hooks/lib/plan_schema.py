@@ -17,9 +17,11 @@ import sys
 from pathlib import Path
 
 REQUIRED_TOP_LEVEL = ["version", "skip_reason", "summary", "updates",
-                      "creates", "deletes", "bidirectional_links", "log_entry"]
+                      "creates", "deletes", "bidirectional_links",
+                      "commits_addressed", "commits_skipped", "log_entry"]
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 ALLOWED_OPS = {"replace", "append_section", "frontmatter_set",
                "frontmatter_add_related", "body_replace"}
 
@@ -90,6 +92,40 @@ def _check_bidir_link(idx, link, errors):
         errors.append(f"{base}: self-loop ({link['a']!r} == {link['b']!r})")
 
 
+def _check_commit_addressed(idx, entry, known_slugs, errors):
+    base = f"commits_addressed[{idx}]"
+    if not isinstance(entry, dict):
+        errors.append(f"{base}: expected object")
+        return None
+    sha = entry.get("sha")
+    if not isinstance(sha, str) or not SHA_RE.match(sha):
+        errors.append(f"{base}.sha: invalid SHA {sha!r} (must match {SHA_RE.pattern})")
+    if "pages" not in entry or not isinstance(entry["pages"], list):
+        errors.append(f"{base}.pages: required list (sha={sha!r})")
+        return sha
+    for j, slug in enumerate(entry["pages"]):
+        if not isinstance(slug, str) or not SLUG_RE.match(slug):
+            errors.append(f"{base}.pages[{j}]: invalid slug {slug!r}")
+        elif slug not in known_slugs:
+            errors.append(f"{base}.pages[{j}]: slug {slug!r} not in updates/creates/deletes "
+                          f"(every page mentioned must appear in one of those buckets)")
+    return sha
+
+
+def _check_commit_skipped(idx, entry, errors):
+    base = f"commits_skipped[{idx}]"
+    if not isinstance(entry, dict):
+        errors.append(f"{base}: expected object")
+        return None
+    sha = entry.get("sha")
+    if not isinstance(sha, str) or not SHA_RE.match(sha):
+        errors.append(f"{base}.sha: invalid SHA {sha!r} (must match {SHA_RE.pattern})")
+    reason = entry.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        errors.append(f"{base}.reason: required non-empty string (sha={sha!r})")
+    return sha
+
+
 def validate(plan):
     """Return list of error strings; empty list = valid."""
     errors = []
@@ -119,6 +155,25 @@ def validate(plan):
                 errors.append(f"slug {s!r} appears in both {seen[s]} and {bucket} (must appear in at most one)")
             else:
                 seen[s] = bucket
+
+    # commits_addressed / commits_skipped
+    known_page_slugs = set(update_slugs) | set(create_slugs) | set(delete_slugs)
+    addressed_shas = []
+    for i, entry in enumerate(plan["commits_addressed"]):
+        sha = _check_commit_addressed(i, entry, known_page_slugs, errors)
+        if sha:
+            addressed_shas.append(sha)
+    skipped_shas = []
+    for i, entry in enumerate(plan["commits_skipped"]):
+        sha = _check_commit_skipped(i, entry, errors)
+        if sha:
+            skipped_shas.append(sha)
+    addressed_set = set(addressed_shas)
+    skipped_set = set(skipped_shas)
+    overlap = addressed_set & skipped_set
+    for sha in sorted(overlap):
+        errors.append(f"commit {sha!r} appears in both commits_addressed and "
+                      f"commits_skipped (overlap not allowed)")
 
     # bidirectional_links: structural check only. Links where one side is in deletes[]
     # are silently skipped by the CLI (spec line 289) — not a schema error here.
