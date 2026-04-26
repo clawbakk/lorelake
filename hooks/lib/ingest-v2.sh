@@ -219,22 +219,11 @@ _run_ingest_v2_fixer() {
   echo "" >> "$AGENT_LOG"
   echo "=== INGEST V2 FIXER (${AGENT_ID}_fixer) ===" >> "$AGENT_LOG"
 
-  # Embed failed page bodies as a slot. Python builds the slot text.
+  # Embed failed page bodies as a slot. The helper script handles missing pages
+  # and the awkward fenced-block formatting that doesn't survive shell escaping.
   local FAILED_BODIES_FILE
   FAILED_BODIES_FILE="$AGENT_DIR/failed-bodies.txt"
-  python3 -c "
-import json, sys
-from pathlib import Path
-failed = json.load(open(sys.argv[1]))
-wiki = Path(sys.argv[2])
-out = []
-for f in failed:
-    slug = f['slug']
-    matches = list(wiki.rglob(slug + '.md'))
-    if matches:
-        out.append('### ' + slug + '\n\`\`\`\n' + matches[0].read_text() + '\n\`\`\`\n')
-print('\n'.join(out))
-" "$FAILED" "$WIKI_ROOT" > "$FAILED_BODIES_FILE"
+  python3 "$LIB_DIR/build_failed_bodies.py" "$FAILED" "$WIKI_ROOT" > "$FAILED_BODIES_FILE"
 
   local FIXER_PROMPT FIXER_RENDER_ERR
   FIXER_RENDER_ERR="$AGENT_DIR/fixer-render.err"
