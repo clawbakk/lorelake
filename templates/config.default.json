@@ -47,7 +47,15 @@
       "fixerAllowedTools": ["Read", "Glob", "Grep"],
       "maxFixerRetries": 1,
       "diffChunkBytes": 2000,
-      "timeoutSeconds": 1200
+      "timeoutSeconds": 1200,
+      "contextBuild": {
+        "_comment": "Tunables for the deterministic file-churn / forced-read computation in build_ingest_context.py.",
+        "paretoTarget": 0.80,
+        "maxFiles": 0,
+        "maxBytes": 150000,
+        "maxBytesPerFile": 30000,
+        "multiTouchFloor": 3
+      }
     }
   },
 
