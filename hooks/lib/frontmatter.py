@@ -106,6 +106,18 @@ def _format_scalar(v):
     return s
 
 
+_BARE_SCALAR_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+def _needs_quotes(value):
+    """Return True if a string value should be double-quoted in YAML output."""
+    if value == "":
+        return True
+    if not _BARE_SCALAR_RE.match(value):
+        return True
+    return False
+
+
 def serialize(d):
     """Render the parsed frontmatter back to text (without the --- delimiters)."""
     lines = []
@@ -124,14 +136,10 @@ def serialize(d):
                     else:
                         lines.append(f"  - {item}")
         else:
-            if isinstance(value, str) and (value == "" or '"' in value or value.startswith("[[")):
+            if isinstance(value, str) and _needs_quotes(value):
                 lines.append(f'{key}: "{value}"')
             elif isinstance(value, str):
-                # Quote strings containing structural chars or starting with structural patterns
-                if any(c in value for c in [":", "#", "{", "}"]):
-                    lines.append(f'{key}: "{value}"')
-                else:
-                    lines.append(f"{key}: {value}")
+                lines.append(f"{key}: {value}")
             else:
                 lines.append(f"{key}: {value}")
     return "\n".join(lines) + "\n"

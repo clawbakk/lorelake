@@ -110,3 +110,97 @@ def test_body_replace_no_op_passthrough():
     """No body_replace in ops → returns the original."""
     result = applier.apply_body_replace("original", [{"op": "replace", "find": "x", "with": "y"}])
     assert result == "original"
+
+
+import importlib as _importlib
+fm = _importlib.import_module("frontmatter")
+
+SAMPLE_PAGE = """---
+title: "Sample"
+description: "A sample."
+tags: [hooks, sample]
+created: 2026-04-23
+updated: 2026-04-23
+status: current
+related:
+  - "[[other]]"
+---
+# Body
+
+## Section A
+A.
+
+## Section B
+B.
+"""
+
+
+def test_frontmatter_set_replaces_value():
+    fm_dict = fm.parse(fm.split(SAMPLE_PAGE)[0])
+    new = applier.apply_frontmatter_ops(fm_dict,
+        [{"op": "frontmatter_set", "key": "description", "value": "New description."}])
+    assert new["description"] == "New description."
+    assert new["title"] == "Sample"  # unchanged
+
+
+def test_frontmatter_add_related_idempotent():
+    fm_dict = fm.parse(fm.split(SAMPLE_PAGE)[0])
+    new = applier.apply_frontmatter_ops(fm_dict,
+        [{"op": "frontmatter_add_related", "items": ["[[new-link]]", "[[other]]"]}])
+    # [[other]] already there, [[new-link]] new; no duplicates.
+    assert new["related"] == ["[[other]]", "[[new-link]]"]
+
+
+def test_apply_update_full_pipeline_on_disk(tmp_path):
+    page = tmp_path / "page.md"
+    page.write_text(SAMPLE_PAGE)
+    update = {
+        "slug": "sample",
+        "rationale": "test",
+        "ops": [
+            {"op": "replace", "find": "A.", "with": "AAA."},
+            {"op": "append_section", "after_heading": "## Section B", "content": "BB.\n"},
+            {"op": "frontmatter_set", "key": "description", "value": "Updated desc."},
+            {"op": "frontmatter_add_related", "items": ["[[adr-005]]"]},
+        ],
+    }
+    applier.apply_update(page, update, today="2026-04-25")
+    out = page.read_text()
+    assert "AAA." in out
+    assert "BB." in out
+    assert 'description: "Updated desc."' in out
+    assert "[[adr-005]]" in out
+    assert "updated: 2026-04-25" in out
+
+
+def test_apply_update_body_replace_preserves_frontmatter(tmp_path):
+    page = tmp_path / "page.md"
+    page.write_text(SAMPLE_PAGE)
+    update = {
+        "slug": "sample",
+        "rationale": "rewrite",
+        "ops": [
+            {"op": "body_replace", "content": "# Brand New Body\nNew text.\n"},
+            {"op": "frontmatter_set", "key": "description", "value": "Rewritten."},
+        ],
+    }
+    applier.apply_update(page, update, today="2026-04-25")
+    out = page.read_text()
+    assert "# Brand New Body" in out
+    assert 'title: "Sample"' in out  # frontmatter intact
+    assert 'description: "Rewritten."' in out
+    assert "## Section A" not in out  # old body gone
+
+
+def test_apply_update_atomic_on_anchor_failure(tmp_path):
+    page = tmp_path / "page.md"
+    page.write_text(SAMPLE_PAGE)
+    update = {
+        "slug": "sample",
+        "rationale": "broken",
+        "ops": [{"op": "replace", "find": "NOT_THERE", "with": "x"}],
+    }
+    with pytest.raises(applier.AnchorNotFound):
+        applier.apply_update(page, update, today="2026-04-25")
+    # File unchanged
+    assert page.read_text() == SAMPLE_PAGE

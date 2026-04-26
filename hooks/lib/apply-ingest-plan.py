@@ -95,6 +95,68 @@ def apply_body_replace(content, ops):
     return content
 
 
+import os
+import importlib
+
+frontmatter = importlib.import_module("frontmatter")
+
+
+def apply_frontmatter_ops(fm_dict, ops):
+    """Return a new dict with frontmatter_* ops applied. Idempotent for add_related."""
+    out = dict(fm_dict)
+    for op in ops:
+        kind = op.get("op")
+        if kind == "frontmatter_set":
+            out[op["key"]] = op["value"]
+        elif kind == "frontmatter_add_related":
+            existing = list(out.get("related") or [])
+            for item in op["items"]:
+                if item not in existing:
+                    existing.append(item)
+            out["related"] = existing
+    return out
+
+
+def _atomic_write(path, content):
+    """Write `content` to `path` atomically via a sibling tempfile + os.replace."""
+    parent = os.path.dirname(str(path)) or "."
+    tmp = os.path.join(parent, f".{os.path.basename(str(path))}.tmp")
+    with open(tmp, "w") as f:
+        f.write(content)
+    os.replace(tmp, str(path))
+
+
+def apply_update(page_path, update, today, llake_root=None, wiki_root=None):
+    """Apply a single `updates[]` entry to `page_path` atomically.
+
+    `today` is the ISO date string used to bump `updated:`. Tests pass it explicitly
+    so they don't depend on the system clock.
+    """
+    if llake_root is not None and wiki_root is not None:
+        check_write_path(page_path, llake_root, wiki_root)
+    original = page_path.read_text()
+    fm_text, body = frontmatter.split(original)
+    fm_dict = frontmatter.parse(fm_text) if fm_text else {}
+
+    ops = update["ops"]
+
+    # Body: body_replace wins over surgical ops in the same update.
+    if any(op.get("op") == "body_replace" for op in ops):
+        new_body = apply_body_replace(body, ops)
+    else:
+        new_body = apply_replace_ops(body, ops)
+        new_body = apply_section_ops(new_body, ops)
+
+    new_fm = apply_frontmatter_ops(fm_dict, ops)
+    new_fm["updated"] = today
+
+    if new_fm:
+        new_text = "---\n" + frontmatter.serialize(new_fm) + "---\n" + new_body
+    else:
+        new_text = new_body
+    _atomic_write(page_path, new_text)
+
+
 def apply_replace_ops(original, ops):
     """Apply a list of {op: replace, find, with} ops to `original` content.
 
