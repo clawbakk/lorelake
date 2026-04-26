@@ -104,6 +104,19 @@ proposing forbidden ops wastes tokens.
 Must equal the union of slugs in updates[], creates[], and deletes[]. The
 schema validator computes this and rejects mismatches.
 
+### R8 — Per-commit accountability
+
+Your plan must account for every commit in `{{COMMIT_RANGE}}`. Two new top-level keys are required:
+
+- `commits_addressed[]` — for each commit whose impact is captured by your plan, list `{"sha": "<short-sha>", "pages": ["<slug>", ...]}`. Each slug must appear in `updates[]`, `creates[]`, or `deletes[]`. `pages` may be `[]` for a commit whose impact is captured indirectly (e.g., already mentioned on a page you didn't choose to edit), but prefer naming the page when you can — it makes the trace reviewable.
+- `commits_skipped[]` — for each commit you chose NOT to address, list `{"sha": "<short-sha>", "reason": "<short justification>"}`. The reason must be specific (e.g., "Pure file rename, no semantic change to document"; not "trivial").
+
+The applier validates that `commits_addressed ∪ commits_skipped` equals the commit set in `{{CONTEXT_DIR}}/changes.json`. If a commit is missing from both, the plan is rejected and `last-ingest-sha` is held — your run is wasted.
+
+Use the SHAs from `changes.json` (the `short` field). Mixing full and short SHAs is fine; the applier prefix-matches.
+
+This is not a busywork field. It is the place where you account for the lady/doctor/bootstrap-style refactors that don't reach into the headline structural change. If you find yourself wanting to skip a hardening commit because the v2 pipeline is more interesting — that's the moment R8 catches.
+
 ## Workflow
 
 1. Read `{{CONTEXT_DIR}}/changes.json` to see what changed.
@@ -115,7 +128,10 @@ schema validator computes this and rejects mismatches.
 4. Read existing wiki pages you intend to update — Read them in a single
    parallel turn (multiple `Read` tool calls in one message) to keep cache
    creates bounded.
-5. Compose the plan. Emit it as your final response.
+5. Compose the plan.
+   - Walk `changes.json` commits one by one. For each, decide: which page slugs in your plan capture its impact? Add an entry to `commits_addressed[]`. If none, add to `commits_skipped[]` with a specific reason.
+   - Verify `commits_addressed ∪ commits_skipped` covers every SHA in changes.json before emitting.
+6. Emit the plan as your final response, beginning with `{` — no prose preamble, no Markdown fences.
 
 ## Skip path
 

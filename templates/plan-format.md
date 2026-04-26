@@ -39,6 +39,18 @@ op semantics.
   "bidirectional_links": [
     { "a": "page-a", "b": "page-b" }
   ],
+  "commits_addressed": [
+    {
+      "sha": "abc1234",
+      "pages": ["page-slug", "another-slug"]
+    }
+  ],
+  "commits_skipped": [
+    {
+      "sha": "def5678",
+      "reason": "Pure file rename, no semantic change to document"
+    }
+  ],
   "log_entry": {
     "operation": "ingest",
     "commit_range": "abc1234..def5678",
@@ -151,6 +163,47 @@ reverse direction. The applier:
 - Adds `[[B]]` to A's `related:` (idempotent).
 - Adds `[[A]]` to B's `related:` (idempotent).
 - Silently skips a pair if either side is in `deletes[]`.
+
+## Per-commit accountability
+
+Every commit in the ingested range must appear in exactly one of these two
+top-level arrays:
+
+### `commits_addressed[]`
+
+List each commit whose impact is captured by the plan:
+
+```json
+{ "sha": "abc1234", "pages": ["page-slug", "another-slug"] }
+```
+
+- `sha` — the short SHA from `changes.json` (`short` field). The applier
+  prefix-matches, so mixing short and full SHAs is fine.
+- `pages` — slugs of every page in `updates[]`, `creates[]`, or `deletes[]`
+  that reflects this commit's impact. Each slug **must** appear in one of
+  those three arrays. `pages` may be `[]` when the commit's impact is captured
+  indirectly (e.g., the affected behaviour is already noted on a page you
+  chose not to edit), but prefer naming the page when you can — it makes the
+  trace reviewable.
+
+### `commits_skipped[]`
+
+List each commit you chose NOT to address:
+
+```json
+{ "sha": "def5678", "reason": "Pure file rename, no semantic change to document" }
+```
+
+- The `reason` must be specific. "trivial" or "minor" is not acceptable.
+  Explain what the commit did and why no wiki update is warranted.
+
+### Validation
+
+The applier computes `commits_addressed ∪ commits_skipped` and checks it
+against the SHA set in `changes.json`. If any commit is missing from both
+arrays the plan is rejected and `last-ingest-sha` is held — the run is
+wasted. Include all commits; the cost of a short `commits_skipped` entry is
+negligible.
 
 ## Skip path
 
