@@ -56,6 +56,52 @@ def commit_metadata(repo, sha, include):
     }
 
 
+import importlib
+
+# Allow `frontmatter` import when this script is run with the lib dir on PYTHONPATH
+_LIB_DIR = Path(__file__).resolve().parent
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+frontmatter = importlib.import_module("frontmatter")
+
+
+def write_wiki_index(wiki_root, out_dir):
+    """Walk wiki/**/*.md and dump frontmatter into wiki-index.json."""
+    wiki_root = Path(wiki_root)
+    if not wiki_root.exists():
+        (out_dir / "wiki-index.json").write_text("{}")
+        return
+    catalog = {}
+    for page in wiki_root.rglob("*.md"):
+        slug = page.stem
+        # category = first path component after wiki_root
+        try:
+            rel = page.relative_to(wiki_root)
+        except ValueError:
+            continue
+        parts = rel.parts
+        category = parts[0] if len(parts) > 1 else ""
+        try:
+            text = page.read_text()
+        except (IOError, OSError):
+            continue
+        fm_text, _ = frontmatter.split(text)
+        try:
+            fm_dict = frontmatter.parse(fm_text) if fm_text else {}
+        except frontmatter.FrontmatterParseError:
+            fm_dict = {}
+        catalog[slug] = {
+            "path": str(rel),
+            "category": category,
+            "title": fm_dict.get("title", slug),
+            "description": fm_dict.get("description", ""),
+            "tags": fm_dict.get("tags", []),
+            "related": fm_dict.get("related", []),
+            "updated": fm_dict.get("updated", ""),
+        }
+    (out_dir / "wiki-index.json").write_text(json.dumps(catalog, indent=2, sort_keys=True))
+
+
 def _safe_name(path):
     return path.replace("/", "__")
 
@@ -154,6 +200,7 @@ def main():
 
     write_per_file_diffs(repo, files_touched, args.last_sha, args.current_sha,
                          out_dir, args.diff_chunk_bytes)
+    write_wiki_index(args.wiki_root, out_dir)
 
 
 if __name__ == "__main__":

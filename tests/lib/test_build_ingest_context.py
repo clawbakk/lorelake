@@ -129,3 +129,40 @@ def test_diffs_oversized_single_hunk_emits_one_chunk(tmp_path):
     # The single hunk is bigger than 50 bytes, but we don't split mid-hunk.
     files = list((out_dir / "diffs").glob("src__x.py*.patch"))
     assert len(files) >= 1
+
+
+def test_wiki_index_basic_shape(tmp_path):
+    repo = _make_repo(tmp_path)
+    sha1 = _commit_file(repo, "src/a.py", "x", "initial")
+    wiki = tmp_path / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    (wiki / "hooks" / "post-merge-hook.md").write_text(
+        '---\ntitle: "Post-Merge Hook"\ndescription: "x"\n'
+        'tags: [hooks]\ncreated: 2026-04-23\nupdated: 2026-04-23\n'
+        'status: current\nrelated:\n  - "[[a]]"\n---\n# Body\n')
+    out_dir = tmp_path / "ctx"
+    res = _run("--project-root", repo, "--wiki-root", wiki,
+               "--last-sha", sha1, "--current-sha", sha1,
+               "--include", "src/", "--out-dir", out_dir, "--diff-chunk-bytes", 2000)
+    assert res.returncode == 0
+    idx = json.loads((out_dir / "wiki-index.json").read_text())
+    assert "post-merge-hook" in idx
+    e = idx["post-merge-hook"]
+    assert e["title"] == "Post-Merge Hook"
+    assert e["category"] == "hooks"
+    assert "[[a]]" in e["related"]
+
+
+def test_wiki_index_handles_pages_without_frontmatter(tmp_path):
+    repo = _make_repo(tmp_path)
+    sha1 = _commit_file(repo, "src/a.py", "x", "initial")
+    wiki = tmp_path / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    (wiki / "hooks" / "bare.md").write_text("# Bare page\n\nNo frontmatter.\n")
+    out_dir = tmp_path / "ctx"
+    res = _run("--project-root", repo, "--wiki-root", wiki,
+               "--last-sha", sha1, "--current-sha", sha1,
+               "--include", "src/", "--out-dir", out_dir, "--diff-chunk-bytes", 2000)
+    assert res.returncode == 0
+    idx = json.loads((out_dir / "wiki-index.json").read_text())
+    assert "bare" in idx
+    assert idx["bare"]["title"] == "bare"  # falls back to slug
+    assert idx["bare"]["related"] == []
