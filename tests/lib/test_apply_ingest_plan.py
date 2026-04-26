@@ -408,6 +408,7 @@ def test_cli_applies_simple_update(tmp_path):
         "updates": [{"slug": "a", "rationale": "x",
                       "ops": [{"op": "frontmatter_set", "key": "description", "value": "Updated."}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                        "summary": "y", "pages_affected": ["a"]}
     }
@@ -432,6 +433,7 @@ def test_cli_records_anchor_failure_continues_others(tmp_path):
             {"slug": "b", "rationale": "ok", "ops": [{"op": "frontmatter_set", "key": "status", "value": "draft"}]},
         ],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                        "summary": "x", "pages_affected": ["a", "b"]}
     }
@@ -463,6 +465,7 @@ def test_cli_appends_log_entry(tmp_path):
         "updates": [{"slug": "a", "rationale": "x",
                       "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                        "summary": "Did the thing", "pages_affected": ["a"]}
     }
@@ -483,6 +486,7 @@ def test_cli_skip_reason_writes_skip_log_entry(tmp_path):
         "version": "1", "skip_reason": "no relevant changes",
         "summary": "n/a", "updates": [], "creates": [], "deletes": [],
         "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                        "summary": "n/a", "pages_affected": []}
     }
@@ -505,6 +509,7 @@ def test_cli_partial_failure_writes_inline_failure_list(tmp_path):
         "updates": [{"slug": "broken", "rationale": "anchor missing",
                       "ops": [{"op": "replace", "find": "NOT_THERE", "with": "z"}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                        "summary": "x", "pages_affected": ["broken"]}
     }
@@ -530,6 +535,7 @@ def test_bidirectional_link_skipped_when_partner_in_deletes(tmp_path):
         "updates": [], "creates": [],
         "deletes": [{"slug": "doomed", "rationale": "removed"}],
         "bidirectional_links": [{"a": "live", "b": "doomed"}],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                        "summary": "x", "pages_affected": ["doomed"]}
     }
@@ -552,6 +558,7 @@ def test_cli_bidir_ghost_slug_holds_cursor(tmp_path):
         "version": "1", "skip_reason": None, "summary": "x",
         "updates": [], "creates": [], "deletes": [],
         "bidirectional_links": [{"a": "ghost-1", "b": "ghost-2"}],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                        "summary": "x", "pages_affected": []}
     }
@@ -586,6 +593,7 @@ def test_cli_malformed_frontmatter_routes_to_failed_json(tmp_path):
              "ops": [{"op": "frontmatter_set", "key": "description", "value": "ok"}]},
         ],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                       "summary": "x", "pages_affected": ["broken", "good"]}
     }
@@ -621,6 +629,7 @@ def test_cli_oserror_during_atomic_write_routes_to_failed(tmp_path):
                  "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]},
             ],
             "creates": [], "deletes": [], "bidirectional_links": [],
+            "commits_addressed": [], "commits_skipped": [],
             "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                           "summary": "x", "pages_affected": ["ro"]}
         }
@@ -708,6 +717,7 @@ def test_cli_no_log_entry_flag_suppresses_log_md_append(tmp_path):
         "updates": [{"slug": "a", "rationale": "x",
                      "ops": [{"op": "frontmatter_set", "key": "description", "value": "z"}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                       "summary": "second pass", "pages_affected": ["a"]}
     }
@@ -781,6 +791,7 @@ def test_cli_default_appends_log_entry(tmp_path):
         "updates": [{"slug": "a", "rationale": "x",
                      "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                       "summary": "first pass", "pages_affected": ["a"]}
     }
@@ -801,6 +812,7 @@ def test_cli_strips_json_fences(tmp_path):
         "updates": [{"slug": "a", "rationale": "x",
                      "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                       "summary": "fenced", "pages_affected": ["a"]}
     }
@@ -821,6 +833,7 @@ def test_cli_strips_bare_fences(tmp_path):
         "updates": [{"slug": "a", "rationale": "x",
                      "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                       "summary": "bare", "pages_affected": ["a"]}
     }
@@ -841,6 +854,7 @@ def test_cli_extracts_balanced_json_from_prose(tmp_path):
         "updates": [{"slug": "a", "rationale": "x",
                      "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                       "summary": "prose", "pages_affected": ["a"]}
     }

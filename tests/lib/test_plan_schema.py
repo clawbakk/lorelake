@@ -27,6 +27,8 @@ MINIMAL_VALID_PLAN = {
     "creates": [],
     "deletes": [],
     "bidirectional_links": [],
+    "commits_addressed": [],
+    "commits_skipped": [],
     "log_entry": {
         "operation": "ingest",
         "commit_range": "abc1234..def5678",
