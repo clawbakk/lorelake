@@ -1,10 +1,10 @@
-"""Tests for build-ingest-context.py — Stage 1 of ingest v2."""
+"""Tests for build_ingest_context.py — Stage 1 of ingest v2."""
 import json
 import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "hooks" / "lib" / "build-ingest-context.py"
+SCRIPT = REPO_ROOT / "hooks" / "lib" / "build_ingest_context.py"
 
 
 def _git(repo, *args):

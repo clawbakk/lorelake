@@ -3,9 +3,9 @@
 # Sourced by hooks/post-merge.sh when ingest.pipeline == "v2".
 #
 # Pipeline:
-#   1. Stage 1: Python pre-processor (build-ingest-context.py) → context dir
+#   1. Stage 1: Python pre-processor (build_ingest_context.py) → context dir
 #   2. Stage 2: Planner agent (claude -p) → plan.json
-#   3. Stage 3: Applier (apply-ingest-plan.py) → applied.json + failed.json
+#   3. Stage 3: Applier (apply_ingest_plan.py) → applied.json + failed.json
 #   4. Optional: Fixer agent + second applier pass on failed.json
 #   5. Finalize: log line, advance SHA cursor (best-effort policy)
 #
@@ -59,7 +59,7 @@ EOF
   # --- Stage 1: Python pre-processor ---
   local include_args=()
   for p in "${INCLUDE_PATHS[@]}"; do include_args+=(--include "$p"); done
-  if ! python3 "$LIB_DIR/build-ingest-context.py" \
+  if ! python3 "$LIB_DIR/build_ingest_context.py" \
       --project-root "$PROJECT_ROOT" \
       --wiki-root "$WIKI_ROOT" \
       --last-sha "$LAST_SHA" \
@@ -132,7 +132,7 @@ EOF
   local TODAY
   TODAY=$(date '+%Y-%m-%d')
 
-  if ! python3 "$LIB_DIR/apply-ingest-plan.py" \
+  if ! python3 "$LIB_DIR/apply_ingest_plan.py" \
       --plan "$PLAN_FILE" \
       --wiki-root "$WIKI_ROOT" \
       --llake-root "$LLAKE_ROOT" \
@@ -241,7 +241,7 @@ print('\n'.join(out))
   echo "=== APPLIER (fix pass) ===" >> "$AGENT_LOG"
   local FINAL_APPLIED="$AGENT_DIR/final-applied.json"
   local FINAL_FAILED="$AGENT_DIR/final-failed.json"
-  if python3 "$LIB_DIR/apply-ingest-plan.py" \
+  if python3 "$LIB_DIR/apply_ingest_plan.py" \
       --plan "$FIX_PLAN" \
       --wiki-root "$WIKI_ROOT" \
       --llake-root "$LLAKE_ROOT" \

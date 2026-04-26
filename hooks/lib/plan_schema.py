@@ -4,12 +4,12 @@
 Validates plan.json against the ingest v2 schema. Run as CLI or import.
 
 CLI:
-    python3 plan-schema.py <plan-path>
+    python3 plan_schema.py <plan-path>
     Exit 0 if valid; nonzero with diagnostics on stderr if invalid.
 
 Import:
-    from importlib import import_module; mod = import_module('plan-schema')
-    errors = mod.validate(plan_dict)  # returns list[str]; empty if valid.
+    import plan_schema
+    errors = plan_schema.validate(plan_dict)  # returns list[str]; empty if valid.
 """
 import json
 import re
@@ -130,12 +130,12 @@ def validate(plan):
 
 def main():
     if len(sys.argv) != 2:
-        print("usage: plan-schema.py <plan-path>", file=sys.stderr)
+        print("usage: plan_schema.py <plan-path>", file=sys.stderr)
         sys.exit(2)
     try:
         plan = json.loads(Path(sys.argv[1]).read_text())
     except (IOError, OSError, json.JSONDecodeError) as e:
-        print(f"plan-schema: cannot parse {sys.argv[1]}: {e}", file=sys.stderr)
+        print(f"plan_schema: cannot parse {sys.argv[1]}: {e}", file=sys.stderr)
         sys.exit(2)
     errors = validate(plan)
     if errors:

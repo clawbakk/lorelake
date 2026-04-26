@@ -1,11 +1,10 @@
-"""Tests for apply-ingest-plan.py — applies an ingest v2 plan to a wiki."""
+"""Tests for apply_ingest_plan.py — applies an ingest v2 plan to a wiki."""
 import pytest
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks" / "lib"))
-import importlib
-applier = importlib.import_module("apply-ingest-plan")
+import apply_ingest_plan as applier
 
 
 def test_replace_single_anchor_works():
@@ -112,8 +111,7 @@ def test_body_replace_no_op_passthrough():
     assert result == "original"
 
 
-import importlib as _importlib
-fm = _importlib.import_module("frontmatter")
+import frontmatter as fm
 
 SAMPLE_PAGE = """---
 title: "Sample"
@@ -380,7 +378,7 @@ import json as _json
 import subprocess as _sub
 
 REPO_ROOT_AIP = Path(__file__).resolve().parents[2]
-APPLIER_CLI = REPO_ROOT_AIP / "hooks" / "lib" / "apply-ingest-plan.py"
+APPLIER_CLI = REPO_ROOT_AIP / "hooks" / "lib" / "apply_ingest_plan.py"
 
 
 def _run_applier(plan_path, wiki, llake, applied, failed, today="2026-04-25"):

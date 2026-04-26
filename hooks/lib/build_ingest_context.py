@@ -56,13 +56,11 @@ def commit_metadata(repo, sha, include):
     }
 
 
-import importlib
-
 # Allow `frontmatter` import when this script is run with the lib dir on PYTHONPATH
 _LIB_DIR = Path(__file__).resolve().parent
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
-frontmatter = importlib.import_module("frontmatter")
+import frontmatter
 
 
 def write_wiki_index(wiki_root, out_dir):
@@ -188,7 +186,7 @@ def main():
         shas = list_commits(repo, args.last_sha, args.current_sha, args.include)
         commits = [commit_metadata(repo, s, args.include) for s in shas]
     except RuntimeError as e:
-        print(f"build-ingest-context: {e}", file=sys.stderr); sys.exit(2)
+        print(f"build_ingest_context: {e}", file=sys.stderr); sys.exit(2)
 
     files_touched = sorted({f["path"] for c in commits for f in c["files"]})
     changes = {

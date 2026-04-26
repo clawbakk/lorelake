@@ -95,10 +95,15 @@ def apply_body_replace(content, ops):
     return content
 
 
-import os
-import importlib
+import sys as _sys_bootstrap
+from pathlib import Path as _Path_bootstrap
+_LIB_DIR = _Path_bootstrap(__file__).resolve().parent
+if str(_LIB_DIR) not in _sys_bootstrap.path:
+    _sys_bootstrap.path.insert(0, str(_LIB_DIR))
+del _sys_bootstrap, _Path_bootstrap, _LIB_DIR
 
-frontmatter = importlib.import_module("frontmatter")
+import os
+import frontmatter
 
 
 def apply_frontmatter_ops(fm_dict, ops):
@@ -340,10 +345,8 @@ def apply_bidirectional_link(wiki_root, slug_a, slug_b):
 import argparse
 import json as _json_mod
 import sys as _sys
-import importlib as _imp
+import plan_schema as _plan_schema
 from pathlib import Path as _Path
-
-_plan_schema = _imp.import_module("plan-schema")
 
 
 def _classify_error(exc):
@@ -400,7 +403,7 @@ def main():
     try:
         plan = _json_mod.loads(_Path(args.plan).read_text())
     except (IOError, _json_mod.JSONDecodeError) as e:
-        print(f"apply-ingest-plan: cannot read/parse plan {args.plan}: {e}", file=_sys.stderr)
+        print(f"apply_ingest_plan: cannot read/parse plan {args.plan}: {e}", file=_sys.stderr)
         _sys.exit(2)
 
     schema_errors = _plan_schema.validate(plan)
@@ -410,7 +413,7 @@ def main():
         _sys.exit(1)
 
     # Bidirectional-link existence check (treated as schema-level — cursor held on
-    # failure). The plan-schema validator can't see the wiki; the CLI can.
+    # failure). The plan_schema validator can't see the wiki; the CLI can.
     known_slugs = {p.stem for p in wiki_root.rglob("*.md")} | {c["slug"] for c in plan["creates"]}
     ref_errors = []
     for i, link in enumerate(plan["bidirectional_links"]):
