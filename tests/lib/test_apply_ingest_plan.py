@@ -821,3 +821,74 @@ def test_cli_rejects_non_json_with_specific_error(tmp_path):
     res = _run_applier(plan_path, wiki, llake, applied, failed)
     assert res.returncode != 0
     assert "non-JSON" in res.stderr or "no JSON object" in res.stderr
+
+
+def test_check_path_schema_dir_rejected(tmp_path):
+    llake = tmp_path / "llake"
+    (llake / "schema").mkdir(parents=True)
+    target = llake / "schema" / "evil.md"
+    with pytest.raises(applier.ForbiddenPath):
+        applier.check_write_path(target, llake_root=llake, wiki_root=llake / "wiki")
+
+
+def test_check_path_last_ingest_sha_rejected(tmp_path):
+    llake = tmp_path / "llake"; llake.mkdir()
+    target = llake / "last-ingest-sha"
+    with pytest.raises(applier.ForbiddenPath):
+        applier.check_write_path(target, llake_root=llake, wiki_root=llake / "wiki")
+
+
+def test_check_path_parent_traversal_rejected(tmp_path):
+    """A literal `..` in the target path that resolves outside llake_root must
+    be rejected — realpath normalizes the .. before our prefix check."""
+    llake = tmp_path / "llake"; (llake / "wiki" / "hooks").mkdir(parents=True)
+    # Target inside wiki/hooks but with ../../../escape.md style — realpath
+    # normalizes to outside the wiki.
+    target = llake / "wiki" / "hooks" / ".." / ".." / ".." / "escape.md"
+    with pytest.raises(applier.ForbiddenPath):
+        applier.check_write_path(target, llake_root=llake, wiki_root=llake / "wiki")
+
+
+def test_apply_create_into_discussions_rejected(tmp_path):
+    llake = tmp_path / "llake"; wiki = llake / "wiki"
+    (wiki / "discussions").mkdir(parents=True)
+    create = {
+        "slug": "evil-discussion", "category": "discussions",
+        "front_matter": {"title": "X", "description": "x", "tags": [],
+                         "created": "2026-04-26", "updated": "2026-04-26",
+                         "status": "current", "related": []},
+        "body": "x",
+    }
+    with pytest.raises(applier.ForbiddenPath):
+        applier.apply_create(wiki, create, today="2026-04-26", llake_root=llake)
+    # No file was written
+    assert not (wiki / "discussions" / "evil-discussion.md").exists()
+
+
+def test_apply_create_into_state_rejected(tmp_path):
+    """Plans cannot create pages in llake/.state/."""
+    llake = tmp_path / "llake"
+    state = llake / ".state"
+    state.mkdir(parents=True)
+    wiki = llake / "wiki"
+    (wiki / "hooks").mkdir(parents=True)
+    # Target llake/.state/something.md — directly outside wiki
+    target2 = llake / ".state" / "evil.md"
+    with pytest.raises(applier.ForbiddenPath):
+        applier.check_write_path(target2, llake_root=llake, wiki_root=wiki)
+
+
+def test_apply_update_into_discussions_rejected(tmp_path):
+    llake = tmp_path / "llake"; wiki = llake / "wiki"
+    (wiki / "discussions").mkdir(parents=True)
+    page = wiki / "discussions" / "captured.md"
+    page.write_text(SAMPLE_PAGE)
+    update = {
+        "slug": "captured", "rationale": "should fail",
+        "ops": [{"op": "frontmatter_set", "key": "description", "value": "rewritten"}]
+    }
+    with pytest.raises(applier.ForbiddenPath):
+        applier.apply_update(page, update, today="2026-04-26",
+                             llake_root=llake, wiki_root=wiki)
+    # File unchanged
+    assert page.read_text() == SAMPLE_PAGE
