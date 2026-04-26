@@ -354,3 +354,65 @@ def test_select_must_read_max_bytes_per_file_truncation_does_not_skip_file():
     )
     assert len(result) == 1
     assert result[0]["path"] == "huge"
+
+
+def test_writes_file_churn_json_and_must_read_patches(tmp_path):
+    repo = _make_repo(tmp_path)
+    # Base commit so sha1 falls inside the range sha0..sha4
+    sha0 = _commit_file(repo, "src/base.py", "base\n", "0")
+    # File touched 3 times → multi-touch
+    sha1 = _commit_file(repo, "src/hot.py", "a\n", "1")
+    sha2 = _commit_file(repo, "src/hot.py", "a\nb\n", "2")
+    sha3 = _commit_file(repo, "src/hot.py", "a\nb\nc\n", "3")
+    # File touched once
+    sha4 = _commit_file(repo, "src/cold.py", "x\n", "4")
+    out_dir = tmp_path / "ctx"
+    res = _run(
+        "--project-root", repo, "--wiki-root", tmp_path / "wiki",
+        "--last-sha", sha0, "--current-sha", sha4,
+        "--include", "src/", "--out-dir", out_dir, "--diff-chunk-bytes", 2000,
+        "--churn-pareto-target", "0.80",
+        "--churn-max-files", "0",
+        "--churn-max-bytes", "150000",
+        "--churn-max-bytes-per-file", "30000",
+        "--churn-multi-touch-floor", "3",
+    )
+    assert res.returncode == 0, res.stderr
+
+    churn_path = out_dir / "file_churn.json"
+    assert churn_path.exists()
+    churn = json.loads(churn_path.read_text())
+    paths = [f["path"] for f in churn["files"]]
+    assert "src/hot.py" in paths
+    hot = next(f for f in churn["files"] if f["path"] == "src/hot.py")
+    assert hot["priority"] == "must"  # 3 commits >= multi_touch_floor
+    assert hot["commits"] == 3
+
+    patches_path = out_dir / "must-read-patches.txt"
+    assert patches_path.exists()
+    body = patches_path.read_text()
+    assert "src/hot.py" in body
+    assert "diff --git" in body  # the unified-diff payload is inlined
+
+
+def test_must_read_patches_empty_when_nothing_qualifies(tmp_path):
+    repo = _make_repo(tmp_path)
+    sha1 = _commit_file(repo, "src/a.py", "x\n", "1")
+    sha2 = _commit_file(repo, "src/a.py", "y\n", "2")
+    out_dir = tmp_path / "ctx"
+    res = _run(
+        "--project-root", repo, "--wiki-root", tmp_path / "wiki",
+        "--last-sha", sha1, "--current-sha", sha2,
+        "--include", "src/", "--out-dir", out_dir, "--diff-chunk-bytes", 2000,
+        "--churn-pareto-target", "0.0",      # disable pareto
+        "--churn-max-files", "0",
+        "--churn-max-bytes", "0",            # disable byte budget
+        "--churn-max-bytes-per-file", "30000",
+        "--churn-multi-touch-floor", "99",   # disable multi-touch
+    )
+    assert res.returncode == 0, res.stderr
+    patches_path = out_dir / "must-read-patches.txt"
+    assert patches_path.exists()
+    # Empty when nothing qualifies. The file still exists (orchestrator
+    # always reads it via {{HIGH_CHURN_PATCHES}} placeholder).
+    assert patches_path.read_text().strip() == ""

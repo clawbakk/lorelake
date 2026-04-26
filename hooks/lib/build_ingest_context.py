@@ -309,6 +309,56 @@ def select_must_read(churn, range_commit_count, get_bytes,
     return must
 
 
+def build_must_read_patches(must_read, diffs_dir, max_bytes_per_file):
+    """Concatenate the patches for must-read files into a single string with
+    headers. Truncates each per-file payload at max_bytes_per_file with a
+    visible marker.
+
+    Args:
+        must_read: list of dicts as returned by select_must_read.
+        diffs_dir: Path; the per-file diff directory written by write_per_file_diffs.
+        max_bytes_per_file: int; per-file payload cap in bytes.
+    Returns:
+        str — the concatenated body. Empty string if must_read is empty.
+    """
+    if not must_read:
+        return ""
+    parts = [
+        "=== HIGH-CHURN FILES (auto-attached for required coverage) ===",
+        "",
+        "These files changed substantially in this range. Their patches are",
+        "inlined below; you do not need to Glob/Read them. Your plan MUST",
+        "address every commit that touches them in commits_addressed[].",
+        "",
+    ]
+    for f in must_read:
+        path = f["path"]
+        safe = _safe_name(path)
+        # Single patch first; chunked patch as fallback (.001, .002, ... + .index.json)
+        single = diffs_dir / f"{safe}.patch"
+        chunks_index = diffs_dir / f"{safe}.index.json"
+        if single.exists():
+            payload = single.read_text()
+        elif chunks_index.exists():
+            idx = json.loads(chunks_index.read_text())
+            payload = "".join((diffs_dir / name).read_text() for name in idx["chunks"])
+        else:
+            payload = "(no diff captured for this file)\n"
+        truncated = False
+        if len(payload.encode()) > max_bytes_per_file:
+            payload = payload.encode()[:max_bytes_per_file].decode("utf-8", errors="ignore")
+            truncated = True
+        header = (f"--- {path} — {f['commits']} commits, "
+                  f"+{f['added']}/-{f['removed']}, score={f['score']:.1f} ---")
+        parts.append(header)
+        parts.append(payload.rstrip())
+        if truncated:
+            parts.append(f"[... patch truncated at {max_bytes_per_file} bytes; "
+                         f"full diff in context/diffs/{safe}.patch]")
+        parts.append("")
+    return "\n".join(parts)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--project-root", required=True)
@@ -318,6 +368,16 @@ def main():
     ap.add_argument("--include", action="append", default=[])
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--diff-chunk-bytes", type=int, default=2000)
+    ap.add_argument("--churn-pareto-target", type=float, default=0.80,
+                    help="Stop adding non-forced files when cumulative score reaches this fraction of total")
+    ap.add_argument("--churn-max-files", type=int, default=0,
+                    help="Hard cap on must-read files (0 → dynamic max(5, commits//4))")
+    ap.add_argument("--churn-max-bytes", type=int, default=150000,
+                    help="Total byte budget for inlined patches (0 → no must-read patches)")
+    ap.add_argument("--churn-max-bytes-per-file", type=int, default=30000,
+                    help="Per-file truncation cap for inlined patches")
+    ap.add_argument("--churn-multi-touch-floor", type=int, default=3,
+                    help="A file in this many commits is forced past Pareto/file caps")
     args = ap.parse_args()
 
     repo = Path(args.project_root)
@@ -339,6 +399,53 @@ def main():
 
     write_per_file_diffs(repo, files_touched, args.last_sha, args.current_sha,
                          out_dir, args.diff_chunk_bytes)
+
+    # File-churn ranking + must-read selection
+    churn_ranked = compute_file_churn(commits)
+
+    diffs_dir = out_dir / "diffs"
+
+    def _patch_bytes(path):
+        safe = _safe_name(path)
+        single = diffs_dir / f"{safe}.patch"
+        chunks_index = diffs_dir / f"{safe}.index.json"
+        if single.exists():
+            return single.stat().st_size
+        if chunks_index.exists():
+            idx = json.loads(chunks_index.read_text())
+            return sum((diffs_dir / name).stat().st_size for name in idx["chunks"])
+        return 0
+
+    must_read = select_must_read(
+        churn_ranked,
+        range_commit_count=len(commits),
+        get_bytes=_patch_bytes,
+        pareto_target=args.churn_pareto_target,
+        max_bytes=args.churn_max_bytes,
+        max_bytes_per_file=args.churn_max_bytes_per_file,
+        multi_touch_floor=args.churn_multi_touch_floor,
+        max_files_override=args.churn_max_files,
+    )
+
+    must_read_paths = {f["path"] for f in must_read}
+    files_out = []
+    for entry in churn_ranked:
+        copy = dict(entry)
+        copy["priority"] = "must" if entry["path"] in must_read_paths else "should"
+        files_out.append(copy)
+
+    (out_dir / "file_churn.json").write_text(json.dumps({
+        "files": files_out,
+        "summary": {
+            "total_files": len(files_out),
+            "must_count": len(must_read),
+            "total_score": sum(f["score"] for f in files_out),
+        },
+    }, indent=2))
+
+    patches_body = build_must_read_patches(must_read, diffs_dir, args.churn_max_bytes_per_file)
+    (out_dir / "must-read-patches.txt").write_text(patches_body)
+
     write_wiki_index(args.wiki_root, out_dir)
 
 
