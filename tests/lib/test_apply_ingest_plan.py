@@ -383,7 +383,8 @@ REPO_ROOT_AIP = Path(__file__).resolve().parents[2]
 APPLIER_CLI = REPO_ROOT_AIP / "hooks" / "lib" / "apply_ingest_plan.py"
 
 
-def _run_applier(plan_path, wiki, llake, applied, failed, today="2026-04-25"):
+def _run_applier(plan_path, wiki, llake, applied, failed, today="2026-04-25",
+                 changes_json=None):
     cmd = ["python3", str(APPLIER_CLI),
            "--plan", str(plan_path),
            "--wiki-root", str(wiki),
@@ -391,7 +392,18 @@ def _run_applier(plan_path, wiki, llake, applied, failed, today="2026-04-25"):
            "--applied-out", str(applied),
            "--failed-out", str(failed),
            "--today", today]
+    if changes_json is not None:
+        cmd += ["--changes-json", str(changes_json)]
     return _sub.run(cmd, capture_output=True, text=True)
+
+
+def _make_minimal_llake(tmp_path):
+    """Build a minimal llake/wiki structure. Returns (llake_root, wiki_root)."""
+    llake = tmp_path / "llake"
+    wiki = llake / "wiki"
+    (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    return llake, wiki
 
 
 def _write_log_md(llake):
@@ -945,3 +957,108 @@ def test_apply_update_into_discussions_rejected(tmp_path):
                              llake_root=llake, wiki_root=wiki)
     # File unchanged
     assert page.read_text() == SAMPLE_PAGE
+
+
+def test_applier_rejects_plan_missing_commits_from_range(tmp_path):
+    """Plan that lists fewer commits than `changes.json` is rejected; cursor held."""
+    llake_root, wiki_root = _make_minimal_llake(tmp_path)
+    changes = {
+        "range": "abc1234..def5678",
+        "commits": [
+            {"sha": "abc1234abc1234abc1234abc1234abc1234abc1", "short": "abc1234",
+             "files": []},
+            {"sha": "def5678def5678def5678def5678def5678def5", "short": "def5678",
+             "files": []},
+        ],
+        "files_touched": [],
+    }
+    changes_path = tmp_path / "changes.json"
+    changes_path.write_text(_json.dumps(changes))
+
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "x",
+        "updates": [], "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [{"sha": "abc1234", "pages": []}],
+        "commits_skipped": [],  # def5678 is uncovered
+        "log_entry": {"operation": "ingest", "commit_range": "abc1234..def5678",
+                      "summary": "x", "pages_affected": []},
+    }
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(_json.dumps(plan))
+
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    rc, _, err = (lambda r: (r.returncode, r.stdout, r.stderr))(
+        _run_applier(plan_path, wiki_root, llake_root, applied, failed,
+                     changes_json=changes_path))
+    assert rc != 0
+    assert "def5678" in err
+    assert "uncovered" in err.lower() or "missing" in err.lower()
+
+
+def test_applier_rejects_plan_referencing_unknown_commit(tmp_path):
+    """A SHA listed in the plan but not in the range is rejected."""
+    llake_root, wiki_root = _make_minimal_llake(tmp_path)
+    changes = {
+        "range": "abc1234..def5678",
+        "commits": [
+            {"sha": "abc1234abc1234abc1234abc1234abc1234abc1", "short": "abc1234",
+             "files": []},
+        ],
+        "files_touched": [],
+    }
+    changes_path = tmp_path / "changes.json"
+    changes_path.write_text(_json.dumps(changes))
+
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "x",
+        "updates": [], "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [
+            {"sha": "abc1234", "pages": []},
+            {"sha": "9999999", "pages": []},  # not in range
+        ],
+        "commits_skipped": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc1234..def5678",
+                      "summary": "x", "pages_affected": []},
+    }
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(_json.dumps(plan))
+
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    rc, _, err = (lambda r: (r.returncode, r.stdout, r.stderr))(
+        _run_applier(plan_path, wiki_root, llake_root, applied, failed,
+                     changes_json=changes_path))
+    assert rc != 0
+    assert "9999999" in err
+
+
+def test_applier_accepts_full_coverage(tmp_path):
+    llake_root, wiki_root = _make_minimal_llake(tmp_path)
+    changes = {
+        "range": "abc1234..def5678",
+        "commits": [
+            {"sha": "abc1234abc1234abc1234abc1234abc1234abc1", "short": "abc1234",
+             "files": []},
+            {"sha": "def5678def5678def5678def5678def5678def5", "short": "def5678",
+             "files": []},
+        ],
+        "files_touched": [],
+    }
+    changes_path = tmp_path / "changes.json"
+    changes_path.write_text(_json.dumps(changes))
+
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "x",
+        "updates": [], "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [{"sha": "abc1234", "pages": []}],
+        "commits_skipped": [{"sha": "def5678", "reason": "rename"}],
+        "log_entry": {"operation": "ingest", "commit_range": "abc1234..def5678",
+                      "summary": "x", "pages_affected": []},
+    }
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(_json.dumps(plan))
+
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    rc, _, err = (lambda r: (r.returncode, r.stdout, r.stderr))(
+        _run_applier(plan_path, wiki_root, llake_root, applied, failed,
+                     changes_json=changes_path))
+    assert rc == 0, err
