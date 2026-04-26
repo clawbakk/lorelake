@@ -70,3 +70,17 @@ def test_missing_user_config_falls_back_to_defaults(tmp_path):
     rc, out, _ = run([str(nonexistent), "ingest.branch"])
     assert rc == 0
     assert out == "main"
+
+
+def test_default_pipeline_is_legacy(tmp_path):
+    user_cfg = tmp_path / "config.json"; user_cfg.write_text("{}")
+    rc, out, _ = run([str(user_cfg), "ingest.pipeline"])
+    assert rc == 0
+    assert out == "legacy"
+
+
+def test_v2_planner_model_default(tmp_path):
+    user_cfg = tmp_path / "config.json"; user_cfg.write_text("{}")
+    rc, out, _ = run([str(user_cfg), "ingest.v2.plannerModel"])
+    assert rc == 0
+    assert out == "opus"
