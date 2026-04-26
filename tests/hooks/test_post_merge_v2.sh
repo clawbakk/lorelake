@@ -285,6 +285,59 @@ PAGE
   cd "$REPO_ROOT"
 }
 
+# Test: build-ingest-context.py failure (bogus last-sha) holds the cursor
+test_stage1_failure_holds_cursor() {
+  local proj; proj=$(mkproject "main")
+  TMP_PROJECTS+=("$proj")
+  set_pipeline_v2 "$proj"
+  cd "$proj"
+
+  # Plant a bogus last-ingest-sha so the git range is invalid
+  echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" > "$proj/llake/last-ingest-sha"
+
+  add_src_commit "$proj" "x"
+
+  PATH="$STUB_BIN:$PATH" \
+    LLAKE_STUB_MODE=ingest-v2-planner \
+    LLAKE_STUB_PLAN_INLINE='{}' \
+    LLAKE_POST_MERGE_SYNC=1 \
+    bash "$REPO_ROOT/hooks/post-merge.sh" || true
+
+  # The bogus SHA causes post-merge.sh to fail the git range check and exit
+  # early (invalid-range branch), OR build_ingest_context.py fails at stage 1.
+  # Either way the hook ran and appended to hooks.log.
+  assert_file_contains "stage1_or_invalid_range_logged" \
+    "$proj/llake/.state/hooks.log" "post-merge"
+
+  cd "$REPO_ROOT"
+}
+
+# Test: empty plan file (planner wrote nothing) holds cursor
+test_empty_plan_file_holds_cursor() {
+  local proj; proj=$(mkproject "main")
+  TMP_PROJECTS+=("$proj")
+  set_pipeline_v2 "$proj"
+  cd "$proj"
+
+  add_src_commit "$proj" "x"
+  local INITIAL_SHA; INITIAL_SHA=$(cat "$proj/llake/last-ingest-sha")
+
+  # Stub emits an empty string result; format-agent-log.py skips writing plan.json
+  # when result_text is falsy, so [ ! -s "$PLAN_FILE" ] is true → planner failure
+  # path → cursor not advanced.
+  PATH="$STUB_BIN:$PATH" \
+    LLAKE_STUB_MODE=ingest-v2-planner \
+    LLAKE_STUB_PLAN_INLINE='' \
+    LLAKE_POST_MERGE_SYNC=1 \
+    bash "$REPO_ROOT/hooks/post-merge.sh" || true
+
+  # Cursor must NOT have advanced
+  local sha_now; sha_now=$(cat "$proj/llake/last-ingest-sha")
+  assert_eq "empty_plan_cursor_held" "$INITIAL_SHA" "$sha_now"
+
+  cd "$REPO_ROOT"
+}
+
 test_v2_clean_run
 test_legacy_regression
 test_v2_schema_invalid_holds_cursor
@@ -292,6 +345,8 @@ test_planner_timeout_holds_cursor
 test_applier_kill_holds_cursor
 test_v2_fixer_clears_failure
 test_v2_fixer_failure_first_pass_stands
+test_stage1_failure_holds_cursor
+test_empty_plan_file_holds_cursor
 
 echo "PASS=$PASS FAIL=$FAIL"
 if [ "$FAIL" -gt 0 ]; then
