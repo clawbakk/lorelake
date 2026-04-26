@@ -160,11 +160,138 @@ json.dump(c, open(p, 'w'), indent=2)
   cd "$REPO_ROOT"
 }
 
+# Test: fixer turns a one-failure first pass into a clean run
+test_v2_fixer_clears_failure() {
+  local proj; proj=$(mkproject "main")
+  TMP_PROJECTS+=("$proj")
+  cd "$proj"
+  python3 -c "
+import json
+p = '$proj/llake/config.json'
+c = json.load(open(p))
+c.setdefault('ingest', {})['pipeline'] = 'v2'
+c['ingest'].setdefault('v2', {})['maxFixerRetries'] = 1
+json.dump(c, open(p, 'w'), indent=2)
+"
+  # Seed a wiki page
+  mkdir -p "$proj/llake/wiki/hooks"
+  cat > "$proj/llake/wiki/hooks/foo.md" << 'PAGE'
+---
+title: "Foo"
+description: "x"
+tags: [hooks]
+created: 2026-04-23
+updated: 2026-04-23
+status: current
+related: []
+---
+# Foo
+
+Original body.
+PAGE
+
+  echo "// noop" >> "$proj/src/foo.py" && git -C "$proj" add . && git -C "$proj" commit -q -m "x"
+
+  # First plan: anchor doesn't exist → AnchorNotFound
+  PLAN_1='{"version":"1","skip_reason":null,"summary":"first",
+"updates":[{"slug":"foo","rationale":"r","ops":[{"op":"replace","find":"NOT_THERE","with":"x"}]}],
+"creates":[],"deletes":[],"bidirectional_links":[],
+"log_entry":{"operation":"ingest","commit_range":"r","summary":"first","pages_affected":["foo"]}}'
+
+  # Fix plan: anchor that DOES exist → success
+  PLAN_2='{"version":"1","skip_reason":null,"summary":"fix",
+"updates":[{"slug":"foo","rationale":"corrected","ops":[{"op":"replace","find":"Original body.","with":"Fixed body."}]}],
+"creates":[],"deletes":[],"bidirectional_links":[],
+"log_entry":{"operation":"ingest","commit_range":"r","summary":"fix","pages_affected":["foo"]}}'
+
+  PATH="$STUB_BIN:$PATH" \
+    LLAKE_STUB_MODE=ingest-v2-planner \
+    LLAKE_STUB_CALL_COUNTER="$proj/.stub-counter" \
+    LLAKE_STUB_PLAN_INLINE_1="$PLAN_1" \
+    LLAKE_STUB_PLAN_INLINE_2="$PLAN_2" \
+    LLAKE_POST_MERGE_SYNC=1 \
+    bash "$REPO_ROOT/hooks/post-merge.sh"
+
+  # Expected: foo.md has "Fixed body." (fix-pass succeeded)
+  if grep -q "Fixed body." "$proj/llake/wiki/hooks/foo.md"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1)); FAILED_NAMES+=("fixer_clears_anchor_failure")
+    echo "  FAIL [fixer_clears_anchor_failure]: page not updated by fixer"
+  fi
+
+  # Expected: log.md has only ONE ingest entry (not two — fix-pass uses --no-log-entry)
+  local entry_count
+  entry_count=$(grep -c "^## \[.*\] ingest | v2 |" "$proj/llake/log.md" || echo 0)
+  assert_eq "fixer_log_md_single_entry" "1" "$entry_count"
+
+  cd "$REPO_ROOT"
+}
+
+# Test: fixer fails → first-pass results stand, hook still returns 0
+test_v2_fixer_failure_first_pass_stands() {
+  local proj; proj=$(mkproject "main")
+  TMP_PROJECTS+=("$proj")
+  cd "$proj"
+  python3 -c "
+import json
+p = '$proj/llake/config.json'
+c = json.load(open(p))
+c.setdefault('ingest', {})['pipeline'] = 'v2'
+c['ingest'].setdefault('v2', {})['maxFixerRetries'] = 1
+json.dump(c, open(p, 'w'), indent=2)
+"
+  mkdir -p "$proj/llake/wiki/hooks"
+  cat > "$proj/llake/wiki/hooks/foo.md" << 'PAGE'
+---
+title: "Foo"
+description: "x"
+tags: []
+created: 2026-04-23
+updated: 2026-04-23
+status: current
+related: []
+---
+# Foo
+
+Body.
+PAGE
+
+  echo "// noop" >> "$proj/src/foo.py" && git -C "$proj" add . && git -C "$proj" commit -q -m "x"
+
+  PLAN_1='{"version":"1","skip_reason":null,"summary":"first",
+"updates":[{"slug":"foo","rationale":"r","ops":[{"op":"replace","find":"NOT_THERE","with":"x"}]}],
+"creates":[],"deletes":[],"bidirectional_links":[],
+"log_entry":{"operation":"ingest","commit_range":"r","summary":"first","pages_affected":["foo"]}}'
+
+  # Fix plan: still wrong → fix pass also produces failed.json
+  PLAN_2='{"version":"1","skip_reason":null,"summary":"fix",
+"updates":[{"slug":"foo","rationale":"r","ops":[{"op":"replace","find":"ALSO_NOT_THERE","with":"y"}]}],
+"creates":[],"deletes":[],"bidirectional_links":[],
+"log_entry":{"operation":"ingest","commit_range":"r","summary":"fix","pages_affected":["foo"]}}'
+
+  PATH="$STUB_BIN:$PATH" \
+    LLAKE_STUB_MODE=ingest-v2-planner \
+    LLAKE_STUB_CALL_COUNTER="$proj/.stub-counter" \
+    LLAKE_STUB_PLAN_INLINE_1="$PLAN_1" \
+    LLAKE_STUB_PLAN_INLINE_2="$PLAN_2" \
+    LLAKE_POST_MERGE_SYNC=1 \
+    bash "$REPO_ROOT/hooks/post-merge.sh"
+
+  # Expected: hooks.log has a 'partial' line
+  assert_file_contains "fixer_failure_partial_logged" \
+    "$proj/llake/.state/hooks.log" "partial:"
+
+  cd "$REPO_ROOT"
+}
+
 test_v2_clean_run
 test_legacy_regression
 test_v2_schema_invalid_holds_cursor
 test_planner_timeout_holds_cursor
 test_applier_kill_holds_cursor
+test_v2_fixer_clears_failure
+test_v2_fixer_failure_first_pass_stands
 
 echo "PASS=$PASS FAIL=$FAIL"
 if [ "$FAIL" -gt 0 ]; then
