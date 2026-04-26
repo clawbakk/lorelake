@@ -111,3 +111,12 @@ def test_bidirectional_link_to_deleted_slug_rejected(tmp_path):
     assert "bidirectional_links" in err
     assert "x" in err
     assert "deletes" in err
+
+
+def test_log_entry_pages_affected_mismatch_rejected(tmp_path):
+    plan = with_update("good-slug", [{"op": "body_replace", "content": "x"}])
+    plan["log_entry"]["pages_affected"] = ["different-slug"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "pages_affected" in err
