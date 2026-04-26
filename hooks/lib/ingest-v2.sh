@@ -34,6 +34,14 @@ run_ingest_v2() {
   diff_chunk_bytes=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.diffChunkBytes")
   v2_timeout=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.timeoutSeconds")
 
+  # --- Stale tempfile sweep ---
+  # _atomic_write leaves .<page>.md.tmp on SIGTERM mid-write. Clean these up
+  # before starting so a previous kill doesn't leave noise in `git status`.
+  # Match dotfile-prefixed names ending .md.tmp; only inside WIKI_ROOT.
+  if [ -d "$WIKI_ROOT" ]; then
+    find "$WIKI_ROOT" -type f -name '.*.md.tmp' -delete 2>/dev/null || true
+  fi
+
   # --- Generate agent ID and dirs ---
   local AGENT_ID AGENT_DIR AGENT_LOG CONTEXT_DIR PLAN_FILE
   AGENT_ID=$(generate_agent_id)
@@ -157,8 +165,18 @@ EOF
   fi
 
   # --- Finalize ---
+  # If the applier was killed before writing its outputs, the cursor must NOT
+  # advance — the next post-merge re-runs the same range. Spec line 508.
+  if [ ! -f "$APPLIED" ] || [ ! -f "$FAILED" ]; then
+    echo "" >> "$AGENT_LOG"
+    echo "=== APPLIER KILLED OR ABORTED MID-PASS (cursor held) ===" >> "$AGENT_LOG"
+    printf "%s | %-13s | aborted: agent %s (no applied/failed; cursor held)\n" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" >> "$LOG_FILE"
+    return 1
+  fi
+
   local n_applied n_failed
-  n_applied=$(python3 -c "import json; d=json.load(open('$APPLIED')); print(len(d['updates'])+len(d['creates'])+len(d['deletes']))")
+  n_applied=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(len(d['updates'])+len(d['creates'])+len(d['deletes']))" "$APPLIED")
   n_failed=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))))" "$FAILED")
 
   echo "$CURRENT_SHA" > "$LLAKE_ROOT/last-ingest-sha"

@@ -135,10 +135,36 @@ json.dump(c, open(p, 'w'), indent=2)
   cd "$REPO_ROOT"
 }
 
+# Test: applier killed mid-pass leaves applied/failed missing → cursor held
+test_applier_kill_holds_cursor() {
+  local proj; proj=$(mkproject "v2-applier-kill")
+  cd "$proj"
+  python3 -c "
+import json
+p = '$proj/llake/config.json'
+c = json.load(open(p))
+c.setdefault('ingest', {})['pipeline'] = 'v2'
+json.dump(c, open(p, 'w'), indent=2)
+"
+  echo "// noop" >> "$proj/src/foo.py" && git -C "$proj" add . && git -C "$proj" commit -q -m "x"
+  local INITIAL_SHA; INITIAL_SHA=$(cat "$proj/llake/last-ingest-sha")
+  # Use a malformed-on-purpose plan.json (not valid JSON) that the applier rejects
+  # with exit 2 BEFORE writing applied/failed.
+  PATH="$STUB_BIN:$PATH" \
+    LLAKE_STUB_MODE=ingest-v2-planner \
+    LLAKE_STUB_PLAN_INLINE='not a plan, just prose' \
+    LLAKE_POST_MERGE_SYNC=1 \
+    bash "$REPO_ROOT/hooks/post-merge.sh" || true
+  local sha_now; sha_now=$(cat "$proj/llake/last-ingest-sha")
+  assert_eq "applier_missing_outputs_cursor_held" "$INITIAL_SHA" "$sha_now"
+  cd "$REPO_ROOT"
+}
+
 test_v2_clean_run
 test_legacy_regression
 test_v2_schema_invalid_holds_cursor
 test_planner_timeout_holds_cursor
+test_applier_kill_holds_cursor
 
 echo "PASS=$PASS FAIL=$FAIL"
 if [ "$FAIL" -gt 0 ]; then
