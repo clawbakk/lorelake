@@ -32,6 +32,17 @@ It contains:
 You may also Read existing wiki pages under {{WIKI_ROOT}}/ when you need their
 current content to compose surgical edits.
 
+## High-churn files (auto-attached)
+
+The pre-processor identifies the files with the most churn in this range and
+attaches their full diffs below. You receive these in context whether or not
+you would have chosen to Read them — they remain authoritative even if the
+list in `file_churn.json` differs slightly. Treat the inlined block as
+required reading; every commit that touches a file listed here must appear
+in `commits_addressed[]`.
+
+{{HIGH_CHURN_PATCHES}}
+
 ## Your tools
 
 You have: `Read`, `Glob`, `Grep`. You do NOT have Write, Edit, or Bash. You
@@ -97,8 +108,10 @@ schema validator computes this and rejects mismatches.
 
 1. Read `{{CONTEXT_DIR}}/changes.json` to see what changed.
 2. Read `{{CONTEXT_DIR}}/wiki-index.json` to see what pages exist.
-3. Read the relevant diffs (per-file, focused). Use `Glob {{CONTEXT_DIR}}/diffs/*.patch`
-   to enumerate; Read the ones that touch areas you plan to update.
+3. The high-churn diffs are already inlined in the prompt above; do not
+   re-Read them. For commits that touch only lower-priority files, Glob
+   `{{CONTEXT_DIR}}/diffs/*.patch` and Read selectively if you need them
+   to compose accurate ops.
 4. Read existing wiki pages you intend to update — Read them in a single
    parallel turn (multiple `Read` tool calls in one message) to keep cache
    creates bounded.
