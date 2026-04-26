@@ -273,3 +273,43 @@ def test_apply_delete_surfaces_inline_link_warnings(tmp_path):
     links = result["dangling_inline_links"]
     assert len(links) == 2
     assert all(l["page"].endswith("ref.md") for l in links)
+
+
+def _make_page(path, slug, related):
+    related_yaml = "\n".join(f'  - "{r}"' for r in related)
+    if related_yaml:
+        related_section = f"related:\n{related_yaml}\n"
+    else:
+        related_section = "related: []\n"
+    path.write_text(
+        f'---\ntitle: "{slug}"\ndescription: "x"\ntags: []\n'
+        f"created: 2026-04-23\nupdated: 2026-04-23\nstatus: current\n"
+        f"{related_section}---\n# {slug}\n"
+    )
+
+
+def test_bidirectional_link_adds_both_sides(tmp_path):
+    wiki = tmp_path / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _make_page(wiki / "hooks" / "a.md", "a", [])
+    _make_page(wiki / "hooks" / "b.md", "b", [])
+    applier.apply_bidirectional_link(wiki, "a", "b")
+    a_text = (wiki / "hooks" / "a.md").read_text()
+    b_text = (wiki / "hooks" / "b.md").read_text()
+    assert "[[b]]" in a_text
+    assert "[[a]]" in b_text
+
+
+def test_bidirectional_link_idempotent(tmp_path):
+    wiki = tmp_path / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _make_page(wiki / "hooks" / "a.md", "a", ["[[b]]"])
+    _make_page(wiki / "hooks" / "b.md", "b", ["[[a]]"])
+    applier.apply_bidirectional_link(wiki, "a", "b")
+    a_related = applier.frontmatter.parse(applier.frontmatter.split((wiki/"hooks"/"a.md").read_text())[0])["related"]
+    assert a_related.count("[[b]]") == 1
+
+
+def test_bidirectional_link_missing_page_raises(tmp_path):
+    wiki = tmp_path / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _make_page(wiki / "hooks" / "a.md", "a", [])
+    with pytest.raises(applier.SlugNotFound):
+        applier.apply_bidirectional_link(wiki, "a", "ghost")

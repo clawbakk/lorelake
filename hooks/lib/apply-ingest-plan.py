@@ -258,6 +258,39 @@ def apply_delete(wiki_root, slug, today, llake_root=None):
     return {"dangling_inline_links": inline}
 
 
+class SlugNotFound(ApplyError):
+    reason = "SlugNotFound"
+
+
+def _resolve_slug_path(wiki_root, slug):
+    matches = [p for p in wiki_root.rglob(f"{slug}.md") if p.is_file()]
+    if not matches:
+        raise SlugNotFound(f"slug not found in wiki: {slug}")
+    matches.sort()
+    return matches[0]
+
+
+def _ensure_related_contains(page_path, token):
+    text = page_path.read_text()
+    fm_text, body = frontmatter.split(text)
+    fm_dict = frontmatter.parse(fm_text) if fm_text else {}
+    related = list(fm_dict.get("related") or [])
+    if token not in related:
+        related.append(token)
+        fm_dict["related"] = related
+        new_text = "---\n" + frontmatter.serialize(fm_dict) + "---\n" + body
+        _atomic_write(page_path, new_text)
+
+
+def apply_bidirectional_link(wiki_root, slug_a, slug_b):
+    """Ensure page_a's related: contains [[b]] and page_b's contains [[a]].
+    Idempotent. Raises SlugNotFound if either page is missing."""
+    a_path = _resolve_slug_path(wiki_root, slug_a)
+    b_path = _resolve_slug_path(wiki_root, slug_b)
+    _ensure_related_contains(a_path, f"[[{slug_b}]]")
+    _ensure_related_contains(b_path, f"[[{slug_a}]]")
+
+
 def apply_replace_ops(original, ops):
     """Apply a list of {op: replace, find, with} ops to `original` content.
 
