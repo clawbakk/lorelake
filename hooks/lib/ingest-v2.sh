@@ -163,11 +163,16 @@ EOF
       --applied-out "$APPLIED" \
       --failed-out "$FAILED" \
       --today "$TODAY" >> "$AGENT_LOG" 2>&1; then
-    # Schema-invalid plan → cursor held
+    local fail_msg="schema-invalid"
+    if tail -20 "$AGENT_LOG" | grep -q "non-JSON planner output"; then
+      fail_msg="non-JSON-plan"
+    elif tail -20 "$AGENT_LOG" | grep -q "schema-invalid JSON"; then
+      fail_msg="malformed-JSON"
+    fi
     echo "" >> "$AGENT_LOG"
-    echo "=== APPLIER FAILED (schema-invalid plan; cursor held) ===" >> "$AGENT_LOG"
-    printf "%s | %-13s | failed: applier (agent %s, schema-invalid)\n" \
-      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" >> "$LOG_FILE"
+    echo "=== APPLIER FAILED ($fail_msg; cursor held) ===" >> "$AGENT_LOG"
+    printf "%s | %-13s | failed: applier (agent %s, %s)\n" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" "$fail_msg" >> "$LOG_FILE"
     return 1
   fi
 

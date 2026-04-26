@@ -434,6 +434,69 @@ def _classify_error(exc):
     return "IOError"
 
 
+def _normalize_plan_text(text):
+    """Strip markdown fences and prose wrapping from a planner-emitted plan.
+
+    Tries, in order:
+      1. The text as-is (after .strip()).
+      2. Strip a leading ```json or ``` fence and matching trailing ```.
+      3. Find the first balanced top-level JSON object {...} in the text.
+
+    Returns the normalized JSON text. Does NOT validate JSON — caller does that
+    via json.loads. Raises ValueError if no JSON-looking object is found at all.
+    """
+    text = text.strip()
+    if not text:
+        raise ValueError("empty plan text")
+
+    # Step 1: as-is
+    if text.startswith("{"):
+        return text
+
+    # Step 2: strip a code fence
+    if text.startswith("```"):
+        # Remove first line (the ``` or ```json marker)
+        first_newline = text.find("\n")
+        if first_newline != -1:
+            inner = text[first_newline + 1:]
+        else:
+            inner = ""
+        # Remove trailing fence if present
+        inner = inner.rstrip()
+        if inner.endswith("```"):
+            inner = inner[:-3].rstrip()
+        if inner.startswith("{"):
+            return inner
+
+    # Step 3: find first balanced { ... } object
+    depth = 0
+    start = -1
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start != -1:
+                return text[start:i + 1]
+
+    raise ValueError("no JSON object found in planner output")
+
+
 def _append_log_entry(llake_root, today, log_entry, has_failures, skip_reason=None, failures=None):
     log_path = llake_root / "log.md"
     if skip_reason:
@@ -482,9 +545,21 @@ def main():
     wiki_root = Path(args.wiki_root)
 
     try:
-        plan = json.loads(Path(args.plan).read_text())
-    except (IOError, json.JSONDecodeError) as e:
-        print(f"apply_ingest_plan: cannot read/parse plan {args.plan}: {e}", file=sys.stderr)
+        raw = Path(args.plan).read_text()
+    except (IOError, OSError) as e:
+        print(f"apply_ingest_plan: cannot read plan {args.plan}: {e}", file=sys.stderr)
+        sys.exit(2)
+    try:
+        normalized = _normalize_plan_text(raw)
+    except ValueError as e:
+        print(f"apply_ingest_plan: non-JSON planner output ({e}); first 200 chars: "
+              f"{raw[:200]!r}", file=sys.stderr)
+        sys.exit(2)
+    try:
+        plan = json.loads(normalized)
+    except json.JSONDecodeError as e:
+        print(f"apply_ingest_plan: schema-invalid JSON in plan {args.plan}: {e}",
+              file=sys.stderr)
         sys.exit(2)
 
     schema_errors = plan_schema.validate(plan)

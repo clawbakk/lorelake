@@ -750,3 +750,74 @@ def test_cli_default_appends_log_entry(tmp_path):
     res = _run_applier(plan_path, wiki, llake, applied, failed)
     assert res.returncode == 0
     assert "first pass" in (llake / "log.md").read_text()
+
+
+def test_cli_strips_json_fences(tmp_path):
+    """Planner emits ```json ... ``` despite instructions; applier handles it."""
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    page = wiki / "hooks" / "a.md"; page.write_text(SAMPLE_PAGE)
+    plan_obj = {
+        "version": "1", "skip_reason": None, "summary": "fenced",
+        "updates": [{"slug": "a", "rationale": "x",
+                     "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
+        "creates": [], "deletes": [], "bidirectional_links": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                      "summary": "fenced", "pages_affected": ["a"]}
+    }
+    fenced = "```json\n" + _json.dumps(plan_obj) + "\n```\n"
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(fenced)
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode == 0, f"stderr: {res.stderr}"
+
+
+def test_cli_strips_bare_fences(tmp_path):
+    """Bare triple-backticks (no language tag) also handled."""
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    (wiki / "hooks" / "a.md").write_text(SAMPLE_PAGE)
+    plan_obj = {
+        "version": "1", "skip_reason": None, "summary": "bare",
+        "updates": [{"slug": "a", "rationale": "x",
+                     "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
+        "creates": [], "deletes": [], "bidirectional_links": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                      "summary": "bare", "pages_affected": ["a"]}
+    }
+    bare_fenced = "```\n" + _json.dumps(plan_obj) + "\n```"
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(bare_fenced)
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode == 0, f"stderr: {res.stderr}"
+
+
+def test_cli_extracts_balanced_json_from_prose(tmp_path):
+    """Last-resort: planner emits prose with embedded JSON object."""
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    (wiki / "hooks" / "a.md").write_text(SAMPLE_PAGE)
+    plan_obj = {
+        "version": "1", "skip_reason": None, "summary": "prose",
+        "updates": [{"slug": "a", "rationale": "x",
+                     "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
+        "creates": [], "deletes": [], "bidirectional_links": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                      "summary": "prose", "pages_affected": ["a"]}
+    }
+    prose = "Here's the plan you asked for:\n\n" + _json.dumps(plan_obj) + "\n\nLet me know if you need changes."
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(prose)
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode == 0, f"stderr: {res.stderr}"
+
+
+def test_cli_rejects_non_json_with_specific_error(tmp_path):
+    """Pure prose with no JSON object → exit 2, stderr says 'non-JSON'."""
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; wiki.mkdir(parents=True)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text("I cannot generate this plan due to context exhaustion.\n")
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode != 0
+    assert "non-JSON" in res.stderr or "no JSON object" in res.stderr
