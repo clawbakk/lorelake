@@ -417,6 +417,9 @@ def main():
     ap.add_argument("--applied-out", required=True)
     ap.add_argument("--failed-out", required=True)
     ap.add_argument("--today", required=True, help="ISO date for `updated:` bumps and log entry")
+    ap.add_argument("--no-log-entry", action="store_true",
+                    help="Skip appending to log.md. Used by the orchestrator on the fix-pass "
+                         "invocation so a single ingest run produces a single log entry.")
     args = ap.parse_args()
 
     llake_root = _Path(args.llake_root)
@@ -455,8 +458,9 @@ def main():
         _Path(args.applied_out).write_text(_json_mod.dumps(
             {"updates": [], "creates": [], "deletes": [], "bidirectional_links": []}))
         _Path(args.failed_out).write_text("[]")
-        _append_log_entry(llake_root, args.today, plan["log_entry"],
-                          has_failures=False, skip_reason=plan["skip_reason"])
+        if not args.no_log_entry:
+            _append_log_entry(llake_root, args.today, plan["log_entry"],
+                              has_failures=False, skip_reason=plan["skip_reason"])
         return 0
 
     applied = {"updates": [], "creates": [], "deletes": [], "bidirectional_links": []}
@@ -510,8 +514,9 @@ def main():
     _Path(args.applied_out).write_text(_json_mod.dumps(applied, indent=2))
     _Path(args.failed_out).write_text(_json_mod.dumps(failed, indent=2))
 
-    _append_log_entry(llake_root, args.today, plan["log_entry"],
-                      has_failures=bool(failed), failures=failed)
+    if not args.no_log_entry:
+        _append_log_entry(llake_root, args.today, plan["log_entry"],
+                          has_failures=bool(failed), failures=failed)
     return 0
 
 

@@ -694,3 +694,59 @@ def test_resolve_slug_path_skips_discussions(tmp_path):
     resolved = applier._resolve_slug_path(wiki, "abc")
     assert "hooks" in str(resolved)
     assert "discussions" not in str(resolved)
+
+
+def test_cli_no_log_entry_flag_suppresses_log_md_append(tmp_path):
+    """--no-log-entry: applied.json/failed.json still written, log.md untouched.
+    Used by the orchestrator on the fix-pass invocation so partial-failure runs
+    don't double-write the ingest entry."""
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    (wiki / "hooks" / "a.md").write_text(SAMPLE_PAGE)
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "second pass",
+        "updates": [{"slug": "a", "rationale": "x",
+                     "ops": [{"op": "frontmatter_set", "key": "description", "value": "z"}]}],
+        "creates": [], "deletes": [], "bidirectional_links": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                      "summary": "second pass", "pages_affected": ["a"]}
+    }
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(_json.dumps(plan))
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    cmd = ["python3", str(APPLIER_CLI),
+           "--plan", str(plan_path),
+           "--wiki-root", str(wiki),
+           "--llake-root", str(llake),
+           "--applied-out", str(applied),
+           "--failed-out", str(failed),
+           "--today", "2026-04-26",
+           "--no-log-entry"]
+    res = _sub.run(cmd, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    log = (llake / "log.md").read_text()
+    # log.md must NOT have the entry — orchestrator handles it
+    assert "second pass" not in log
+    assert "## [2026-04-26]" not in log
+    # applied/failed still written
+    assert "Updated" in (wiki / "hooks" / "a.md").read_text() or \
+        _json.loads(applied.read_text())["updates"][0]["slug"] == "a"
+
+
+def test_cli_default_appends_log_entry(tmp_path):
+    """Without the flag, behavior is unchanged (regression guard)."""
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    (wiki / "hooks" / "a.md").write_text(SAMPLE_PAGE)
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "first pass",
+        "updates": [{"slug": "a", "rationale": "x",
+                     "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
+        "creates": [], "deletes": [], "bidirectional_links": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                      "summary": "first pass", "pages_affected": ["a"]}
+    }
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(_json.dumps(plan))
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode == 0
+    assert "first pass" in (llake / "log.md").read_text()

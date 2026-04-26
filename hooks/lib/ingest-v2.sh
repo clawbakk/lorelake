@@ -247,7 +247,8 @@ print('\n'.join(out))
       --llake-root "$LLAKE_ROOT" \
       --applied-out "$FINAL_APPLIED" \
       --failed-out "$FINAL_FAILED" \
-      --today "$TODAY" >> "$AGENT_LOG" 2>&1; then
+      --today "$TODAY" \
+      --no-log-entry >> "$AGENT_LOG" 2>&1; then
     # Merge final-failed.json back into FAILED — that becomes the canonical
     # remaining-failures list for the orchestrator's finalize step.
     cp "$FINAL_FAILED" "$FAILED"
