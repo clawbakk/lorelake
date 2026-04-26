@@ -67,6 +67,17 @@ test_v2_clean_run() {
   assert_eq "v2_clean_exit" "0" "$rc"
   local sha_now; sha_now=$(cat "$proj/llake/last-ingest-sha")
   assert_eq "v2_cursor_advanced" "$CURRENT_SHA" "$sha_now"
+
+  # The high-churn list must be written even on small ranges (file always
+  # present; may be empty when nothing qualifies).
+  local AGENT_DIR_GLOB; AGENT_DIR_GLOB=$(ls -d "$proj/llake/.state/agents/"* 2>/dev/null | head -1)
+  if [ -f "$AGENT_DIR_GLOB/context/file_churn.json" ]; then PASS=$((PASS+1))
+  else FAIL=$((FAIL+1)); FAILED_NAMES+=("v2_file_churn_json_present")
+       echo "  FAIL [v2_file_churn_json_present]: $AGENT_DIR_GLOB/context/file_churn.json missing"; fi
+  if [ -f "$AGENT_DIR_GLOB/context/must-read-patches.txt" ]; then PASS=$((PASS+1))
+  else FAIL=$((FAIL+1)); FAILED_NAMES+=("v2_must_read_patches_present")
+       echo "  FAIL [v2_must_read_patches_present]: $AGENT_DIR_GLOB/context/must-read-patches.txt missing"; fi
+
   cd "$REPO_ROOT"
 }
 

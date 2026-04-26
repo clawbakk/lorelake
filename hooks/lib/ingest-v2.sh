@@ -48,6 +48,12 @@ run_ingest_v2() {
   max_retries=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.maxFixerRetries")
   diff_chunk_bytes=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.diffChunkBytes")
   v2_timeout=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.timeoutSeconds")
+  local churn_pareto churn_max_files churn_max_bytes churn_max_bytes_per_file churn_multi_touch_floor
+  churn_pareto=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.contextBuild.paretoTarget")
+  churn_max_files=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.contextBuild.maxFiles")
+  churn_max_bytes=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.contextBuild.maxBytes")
+  churn_max_bytes_per_file=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.contextBuild.maxBytesPerFile")
+  churn_multi_touch_floor=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.contextBuild.multiTouchFloor")
 
   # --- Stale tempfile sweep ---
   # _atomic_write leaves .<page>.md.tmp on SIGTERM mid-write. Clean these up
@@ -85,7 +91,13 @@ EOF
       --current-sha "$CURRENT_SHA" \
       "${include_args[@]}" \
       --out-dir "$CONTEXT_DIR" \
-      --diff-chunk-bytes "$diff_chunk_bytes" >> "$AGENT_LOG" 2>&1; then
+      --diff-chunk-bytes "$diff_chunk_bytes" \
+      --churn-pareto-target "$churn_pareto" \
+      --churn-max-files "$churn_max_files" \
+      --churn-max-bytes "$churn_max_bytes" \
+      --churn-max-bytes-per-file "$churn_max_bytes_per_file" \
+      --churn-multi-touch-floor "$churn_multi_touch_floor" \
+      >> "$AGENT_LOG" 2>&1; then
     echo "" >> "$AGENT_LOG"
     echo "=== STAGE 1 FAILED ===" >> "$AGENT_LOG"
     printf "%s | %-13s | failed: stage1 (agent %s)\n" \
@@ -94,6 +106,11 @@ EOF
   fi
 
   # --- Stage 2: Planner ---
+  local HIGH_CHURN_PATCHES_BODY=""
+  if [ -f "$CONTEXT_DIR/must-read-patches.txt" ]; then
+    HIGH_CHURN_PATCHES_BODY=$(cat "$CONTEXT_DIR/must-read-patches.txt")
+  fi
+
   local PLANNER_RENDER_ERR PLANNER_PROMPT
   PLANNER_RENDER_ERR="$AGENT_DIR/planner-render.err"
   PLANNER_PROMPT=$(python3 "$LIB_DIR/render-prompt.py" \
@@ -105,7 +122,8 @@ EOF
     "LLAKE_ROOT=$LLAKE_ROOT" \
     "WIKI_ROOT=$WIKI_ROOT" \
     "COMMIT_RANGE=$COMMIT_RANGE" \
-    "CONTEXT_DIR=$CONTEXT_DIR" 2>"$PLANNER_RENDER_ERR")
+    "CONTEXT_DIR=$CONTEXT_DIR" \
+    "HIGH_CHURN_PATCHES=$HIGH_CHURN_PATCHES_BODY" 2>"$PLANNER_RENDER_ERR")
   local PLANNER_RENDER_EXIT=$?
   if [ "$PLANNER_RENDER_EXIT" -ne 0 ] || [ -z "$PLANNER_PROMPT" ]; then
     log_render_failure "PLANNER" "$PLANNER_RENDER_EXIT" "$(cat "$PLANNER_RENDER_ERR")" "$AGENT_LOG"
