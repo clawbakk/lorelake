@@ -27,13 +27,28 @@
   "ingest": {
     "_comment": "Post-merge agent that updates wiki from code changes on the monitored branch.",
     "enabled": true,
+    "pipeline": "v2",
     "model": "opus",
     "effort": "high",
     "maxBudgetUsd": 10.00,
     "timeoutSeconds": 1200,
     "branch": "main",
     "include": ["hooks/", "schema/", "skills/", "templates/", "tests/"],
-    "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
+    "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+    "v2": {
+      "_comment": "Settings for ingest pipeline v2 (planner + Python applier + fixer).",
+      "plannerModel": "opus",
+      "plannerEffort": "high",
+      "plannerBudgetUsd": 10.00,
+      "plannerAllowedTools": ["Read", "Glob", "Grep"],
+      "fixerModel": "opus",
+      "fixerEffort": "medium",
+      "fixerBudgetUsd": 5.00,
+      "fixerAllowedTools": ["Read", "Glob", "Grep"],
+      "maxFixerRetries": 1,
+      "diffChunkBytes": 2000,
+      "timeoutSeconds": 2400
+    }
   },
 
   "lint": {

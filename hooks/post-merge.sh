@@ -162,6 +162,8 @@ if ! git -C "$PROJECT_ROOT" log --oneline "$LAST_SHA..$CURRENT_SHA" > /dev/null 
   exit 0
 fi
 
+COMMIT_RANGE="${LAST_SHA:0:7}..${CURRENT_SHA:0:7}"
+
 # v2 branch: hand off to the v2 orchestrator before legacy setup runs.
 # v2 owns its own agent ID, dirs, watchdog, prompt rendering, and finalize —
 # nothing below this branch executes when pipeline == "v2".
@@ -219,8 +221,6 @@ AGENT_LOG="$AGENT_DIR/agent.log"
 # Spawn background Claude CLI agent for ingest with watchdog
 export IS_LLAKE_AGENT=true
 export LLAKE_AGENT_ID="$AGENT_ID"
-
-COMMIT_RANGE="${LAST_SHA:0:7}..${CURRENT_SHA:0:7}"
 
 # Build include-based pathspec for agent's git commands (e.g., -- 'src/' 'scripts/' 'package.json')
 if [ ${#INCLUDE_PATHS[@]} -gt 0 ]; then
