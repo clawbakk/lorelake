@@ -160,6 +160,52 @@ def apply_update(page_path, update, today, llake_root=None, wiki_root=None):
 import re as _re
 
 
+class ForbiddenPath(ApplyError):
+    reason = "ForbiddenPath"
+
+
+_FORBIDDEN_SUBTREES = (".state", "schema")
+
+
+def check_write_path(target, llake_root, wiki_root, allow_log_md=False):
+    """Raise ForbiddenPath unless `target` is a permitted destination.
+
+    Permitted: <wiki_root>/<not-discussions>/**, plus <llake_root>/log.md if
+    allow_log_md=True. Forbidden: discussions/**, .state/**, schema/** (anywhere),
+    config.json, last-ingest-sha, anything outside <llake_root>/.
+
+    Symlink escapes are defeated via realpath.
+    """
+    real_target = os.path.realpath(str(target))
+    real_llake = os.path.realpath(str(llake_root))
+    real_wiki = os.path.realpath(str(wiki_root))
+    sep = os.sep
+
+    if not real_target.startswith(real_llake + sep) and real_target != real_llake:
+        raise ForbiddenPath(f"target outside llake_root: {real_target}")
+
+    rel = real_target[len(real_llake) + 1:] if real_target != real_llake else ""
+
+    if allow_log_md and rel == "log.md":
+        return
+
+    forbidden_files = {"config.json", "last-ingest-sha"}
+    if rel in forbidden_files:
+        raise ForbiddenPath(f"forbidden file: {rel}")
+
+    parts = rel.split(sep)
+    if parts and parts[0] in _FORBIDDEN_SUBTREES:
+        raise ForbiddenPath(f"forbidden subtree: {parts[0]}")
+
+    # Wiki writes must be inside wiki_root and not in discussions/.
+    if not real_target.startswith(real_wiki + sep):
+        raise ForbiddenPath(f"non-wiki target: {real_target}")
+    wiki_rel = real_target[len(real_wiki) + 1:]
+    wiki_parts = wiki_rel.split(sep)
+    if wiki_parts and wiki_parts[0] == "discussions":
+        raise ForbiddenPath("wiki/discussions/** is owned by session-capture")
+
+
 class AlreadyExists(ApplyError):
     reason = "AlreadyExists"
 

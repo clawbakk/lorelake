@@ -313,3 +313,64 @@ def test_bidirectional_link_missing_page_raises(tmp_path):
     _make_page(wiki / "hooks" / "a.md", "a", [])
     with pytest.raises(applier.SlugNotFound):
         applier.apply_bidirectional_link(wiki, "a", "ghost")
+
+
+def test_check_path_inside_wiki_ok(tmp_path):
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    target = wiki / "hooks" / "x.md"
+    applier.check_write_path(target, llake_root=llake, wiki_root=wiki)
+
+
+def test_check_path_in_discussions_rejected(tmp_path):
+    llake = tmp_path / "llake"; wiki = llake / "wiki"
+    (wiki / "discussions").mkdir(parents=True)
+    target = wiki / "discussions" / "x.md"
+    with pytest.raises(applier.ForbiddenPath):
+        applier.check_write_path(target, llake_root=llake, wiki_root=wiki)
+
+
+def test_check_path_outside_llake_rejected(tmp_path):
+    llake = tmp_path / "llake"; wiki = llake / "wiki"
+    (llake).mkdir()
+    target = tmp_path / "elsewhere.md"
+    with pytest.raises(applier.ForbiddenPath):
+        applier.check_write_path(target, llake_root=llake, wiki_root=wiki)
+
+
+def test_check_path_state_dir_rejected(tmp_path):
+    llake = tmp_path / "llake"; (llake / ".state").mkdir(parents=True)
+    target = llake / ".state" / "evil.md"
+    with pytest.raises(applier.ForbiddenPath):
+        applier.check_write_path(target, llake_root=llake, wiki_root=llake / "wiki")
+
+
+def test_check_path_config_json_rejected(tmp_path):
+    llake = tmp_path / "llake"; llake.mkdir()
+    target = llake / "config.json"
+    with pytest.raises(applier.ForbiddenPath):
+        applier.check_write_path(target, llake_root=llake, wiki_root=llake / "wiki")
+
+
+def test_check_path_log_md_allowed(tmp_path):
+    llake = tmp_path / "llake"; llake.mkdir()
+    target = llake / "log.md"
+    applier.check_write_path(target, llake_root=llake, wiki_root=llake / "wiki", allow_log_md=True)
+
+
+def test_check_path_symlink_escape_rejected(tmp_path):
+    llake = tmp_path / "llake"; (llake / "wiki" / "hooks").mkdir(parents=True)
+    outside = tmp_path / "outside.md"; outside.write_text("evil")
+    link = llake / "wiki" / "hooks" / "evil.md"
+    link.symlink_to(outside)
+    with pytest.raises(applier.ForbiddenPath):
+        applier.check_write_path(link, llake_root=llake, wiki_root=llake / "wiki")
+
+
+def test_apply_delete_into_discussions_rejected_and_file_kept(tmp_path):
+    llake = tmp_path / "llake"; wiki = llake / "wiki"
+    (wiki / "discussions").mkdir(parents=True)
+    target = wiki / "discussions" / "captured.md"
+    target.write_text("---\ntitle: c\n---\n# c\n")
+    with pytest.raises(applier.ForbiddenPath):
+        applier.apply_delete(wiki, "captured", today="2026-04-25", llake_root=llake)
+    assert target.exists(), "ForbiddenPath must abort before unlink"
