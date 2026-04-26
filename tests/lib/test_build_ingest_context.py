@@ -240,3 +240,19 @@ def test_compute_file_churn_handles_files_without_line_counts():
     assert churn[0]["commits"] == 1
     assert churn[0]["added"] == 0
     assert churn[0]["removed"] == 0
+
+
+def test_changes_json_records_per_file_line_counts(tmp_path):
+    repo = _make_repo(tmp_path)
+    sha1 = _commit_file(repo, "src/foo.py", "a\nb\nc\n", "initial")
+    sha2 = _commit_file(repo, "src/foo.py", "a\nb\nc\nd\ne\n", "add 2 lines")
+    out_dir = tmp_path / "ctx"
+    res = _run("--project-root", repo, "--wiki-root", tmp_path / "wiki",
+               "--last-sha", sha1, "--current-sha", sha2,
+               "--include", "src/", "--out-dir", out_dir, "--diff-chunk-bytes", 2000)
+    assert res.returncode == 0, res.stderr
+    changes = json.loads((out_dir / "changes.json").read_text())
+    foo_files = [f for c in changes["commits"] for f in c["files"] if f["path"] == "src/foo.py"]
+    # Latest commit added 2 lines, removed 0
+    add_two = next(f for f in foo_files if f.get("added") == 2)
+    assert add_two["removed"] == 0

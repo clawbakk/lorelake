@@ -51,6 +51,28 @@ def commit_metadata(repo, sha, include):
         parts = ln.split("\t")
         status, path = parts[0], parts[-1]
         files.append({"path": path, "status": status[0]})
+
+    # Per-file numstat — added / removed line counts. `git show --numstat`
+    # emits "<added>\t<removed>\t<path>" per file. Binary files emit "-\t-\t<path>";
+    # we treat those as 0/0.
+    numstat_out = git(repo, "show", "--numstat", "--format=", sha, "--", *include)
+    by_path_lines = {}
+    for ln in numstat_out.splitlines():
+        if not ln.strip():
+            continue
+        parts = ln.split("\t")
+        if len(parts) < 3:
+            continue
+        added_s, removed_s, path = parts[0], parts[1], parts[-1]
+        added = int(added_s) if added_s.isdigit() else 0
+        removed = int(removed_s) if removed_s.isdigit() else 0
+        by_path_lines[path] = (added, removed)
+
+    for entry in files:
+        added, removed = by_path_lines.get(entry["path"], (0, 0))
+        entry["added"] = added
+        entry["removed"] = removed
+
     return {
         "sha": full_sha, "short": short, "author": author, "date": date,
         "subject": subject, "body": body, "files": files,
