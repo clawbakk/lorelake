@@ -365,13 +365,15 @@ def test_check_path_symlink_escape_rejected(tmp_path):
 
 
 def test_apply_delete_into_discussions_rejected_and_file_kept(tmp_path):
+    """Discussions pages are invisible to apply_delete (skipped by _walk_wiki_pages).
+    The slug resolves to target_already_absent and the file is never touched."""
     llake = tmp_path / "llake"; wiki = llake / "wiki"
     (wiki / "discussions").mkdir(parents=True)
     target = wiki / "discussions" / "captured.md"
     target.write_text("---\ntitle: c\n---\n# c\n")
-    with pytest.raises(applier.ForbiddenPath):
-        applier.apply_delete(wiki, "captured", today="2026-04-25", llake_root=llake)
-    assert target.exists(), "ForbiddenPath must abort before unlink"
+    result = applier.apply_delete(wiki, "captured", today="2026-04-25", llake_root=llake)
+    assert result["note"] == "target_already_absent", "discussions slug must appear absent to ingest"
+    assert target.exists(), "_walk_wiki_pages skip must leave file untouched"
 
 
 import json as _json
@@ -631,3 +633,64 @@ def test_cli_oserror_during_atomic_write_routes_to_failed(tmp_path):
             f"ro should be in failed.json with IOError, got: {f}"
     finally:
         os.chmod(parent, original_mode)
+
+
+def test_scrub_related_skips_discussions(tmp_path):
+    """Spec: wiki/discussions/** is owned by session-capture; ingest must not
+    mutate it even via cascade scrub on delete."""
+    wiki = tmp_path / "wiki"
+    (wiki / "hooks").mkdir(parents=True)
+    (wiki / "discussions").mkdir(parents=True)
+    # The page being deleted
+    (wiki / "hooks" / "doomed.md").write_text(SAMPLE_PAGE.replace("Sample", "Doomed"))
+    # A discussion entry that references the doomed slug
+    discussion_text = (
+        '---\ntitle: D\nrelated:\n  - "[[doomed]]"\n  - "[[keeper]]"\n---\n# D\n'
+    )
+    (wiki / "discussions" / "topic.md").write_text(discussion_text)
+    # A regular page that also references it (should be scrubbed)
+    (wiki / "hooks" / "other.md").write_text(
+        '---\ntitle: O\nrelated:\n  - "[[doomed]]"\n---\n# O\n'
+    )
+    applier.apply_delete(wiki, "doomed", today="2026-04-26")
+    # Discussion file: untouched (still contains [[doomed]])
+    assert (wiki / "discussions" / "topic.md").read_text() == discussion_text
+    # Regular page: scrubbed
+    other_text = (wiki / "hooks" / "other.md").read_text()
+    assert "[[doomed]]" not in other_text
+
+
+def test_scan_inline_links_skips_discussions(tmp_path):
+    """dangling_inline_links should not include discussion-page bodies."""
+    wiki = tmp_path / "wiki"
+    (wiki / "hooks").mkdir(parents=True)
+    (wiki / "discussions").mkdir(parents=True)
+    (wiki / "hooks" / "doomed.md").write_text(SAMPLE_PAGE.replace("Sample", "D"))
+    (wiki / "discussions" / "topic.md").write_text(
+        "---\ntitle: T\n---\n# T\n\nReferences [[doomed]] inline.\n"
+    )
+    (wiki / "hooks" / "ref.md").write_text(
+        "---\ntitle: R\n---\n# R\n\nAlso [[doomed]] here.\n"
+    )
+    result = applier.apply_delete(wiki, "doomed", today="2026-04-26")
+    pages = {l["page"] for l in result["dangling_inline_links"]}
+    assert all("discussions" not in p for p in pages), \
+        f"dangling list leaked discussions: {pages}"
+    assert any("ref.md" in p for p in pages)
+
+
+def test_resolve_slug_path_skips_discussions(tmp_path):
+    """A page in discussions/ with the same slug as a regular page must not
+    win the lexicographic sort — the regular page should resolve."""
+    wiki = tmp_path / "wiki"
+    (wiki / "hooks").mkdir(parents=True)
+    (wiki / "discussions").mkdir(parents=True)
+    # discussions/abc.md sorts before hooks/abc.md alphabetically
+    (wiki / "discussions" / "abc.md").write_text("---\ntitle: D\n---\n# D\n")
+    (wiki / "hooks" / "abc.md").write_text(
+        '---\ntitle: H\nrelated: []\n---\n# H\n'
+    )
+    # Resolve the slug — must pick the hooks/ one, not discussions/
+    resolved = applier._resolve_slug_path(wiki, "abc")
+    assert "hooks" in str(resolved)
+    assert "discussions" not in str(resolved)

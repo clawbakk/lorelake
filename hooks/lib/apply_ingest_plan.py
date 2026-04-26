@@ -234,12 +234,31 @@ def apply_create(wiki_root, create, today, llake_root=None):
     _atomic_write(target, text)
 
 
+def _walk_wiki_pages(wiki_root):
+    """Yield every wiki page file EXCEPT those under wiki_root/discussions/.
+
+    Discussions are owned by session-capture (CLAUDE.md three-writer model);
+    ingest must never read them as scrub/index targets. Tests pin this.
+    Skips non-files (directories named X.md, dangling symlinks, etc.).
+    """
+    for page in wiki_root.rglob("*.md"):
+        if not page.is_file():
+            continue
+        try:
+            rel_parts = page.relative_to(wiki_root).parts
+        except ValueError:
+            continue
+        if rel_parts and rel_parts[0] == "discussions":
+            continue
+        yield page
+
+
 def _scrub_related(wiki_root, deleted_slug):
     """Remove `deleted_slug` from every wiki page's frontmatter `related:` list.
     Idempotent. Returns count of pages modified."""
     target_token = f"[[{deleted_slug}]]"
     count = 0
-    for page in wiki_root.rglob("*.md"):
+    for page in _walk_wiki_pages(wiki_root):
         try:
             text = page.read_text()
         except (IOError, OSError):
@@ -266,7 +285,7 @@ def _scan_inline_links(wiki_root, deleted_slug):
     of [[<deleted_slug>]]."""
     pattern = _re.compile(r"\[\[" + _re.escape(deleted_slug) + r"\]\]")
     out = []
-    for page in wiki_root.rglob("*.md"):
+    for page in _walk_wiki_pages(wiki_root):
         try:
             text = page.read_text()
         except (IOError, OSError):
@@ -293,7 +312,7 @@ def apply_delete(wiki_root, slug, today, llake_root=None):
     from every other page's `related:` and surface inline [[slug]] mentions as warnings.
     """
     # Resolve the page by walking the wiki for <slug>.md.
-    matches = [p for p in wiki_root.rglob(f"{slug}.md") if p.is_file()]
+    matches = [p for p in _walk_wiki_pages(wiki_root) if p.name == f"{slug}.md"]
     if not matches:
         return {"note": "target_already_absent", "dangling_inline_links": []}
     if len(matches) > 1:
@@ -314,7 +333,7 @@ class SlugNotFound(ApplyError):
 
 
 def _resolve_slug_path(wiki_root, slug):
-    matches = [p for p in wiki_root.rglob(f"{slug}.md") if p.is_file()]
+    matches = [p for p in _walk_wiki_pages(wiki_root) if p.name == f"{slug}.md"]
     if not matches:
         raise SlugNotFound(f"slug not found in wiki: {slug}")
     matches.sort()
