@@ -350,9 +350,12 @@ from pathlib import Path as _Path
 
 
 def _classify_error(exc):
-    """Map an ApplyError instance to the failed.json `reason` string."""
+    """Map an exception to the failed.json `reason` string. Per spec line 525,
+    non-ApplyError I/O failures land here too."""
     if isinstance(exc, ApplyError):
         return exc.reason
+    if isinstance(exc, frontmatter.FrontmatterParseError):
+        return "FrontmatterParseError"
     return "IOError"
 
 
@@ -447,7 +450,7 @@ def main():
             apply_update(page_path, upd, today=args.today,
                          llake_root=llake_root, wiki_root=wiki_root)
             applied["updates"].append({"slug": slug, "ops_applied": len(upd["ops"])})
-        except ApplyError as e:
+        except (ApplyError, OSError, UnicodeDecodeError, frontmatter.FrontmatterParseError) as e:
             failed.append({"slug": slug, "reason": _classify_error(e), "detail": str(e)})
 
     for c in plan["creates"]:
@@ -455,7 +458,7 @@ def main():
         try:
             apply_create(wiki_root, c, today=args.today, llake_root=llake_root)
             applied["creates"].append({"slug": slug, "category": c["category"]})
-        except ApplyError as e:
+        except (ApplyError, OSError, UnicodeDecodeError, frontmatter.FrontmatterParseError) as e:
             failed.append({"slug": slug, "reason": _classify_error(e), "detail": str(e)})
 
     for d in plan["deletes"]:
@@ -466,7 +469,7 @@ def main():
             if res.get("note"):
                 entry["note"] = res["note"]
             applied["deletes"].append(entry)
-        except ApplyError as e:
+        except (ApplyError, OSError, UnicodeDecodeError, frontmatter.FrontmatterParseError) as e:
             failed.append({"slug": slug, "reason": _classify_error(e), "detail": str(e)})
 
     # Spec line 289: silently skip bidirectional_links where either side is in deletes[].

@@ -561,3 +561,73 @@ def test_cli_bidir_ghost_slug_holds_cursor(tmp_path):
     assert (llake / "log.md").read_text() == ""
     assert not applied.exists() or applied.read_text() == ""
     assert not failed.exists() or failed.read_text() == ""
+
+
+def test_cli_malformed_frontmatter_routes_to_failed_json(tmp_path):
+    """Spec contract: per-page errors land in failed.json with a reason; the
+    applier does NOT crash and continue processing remaining ops.
+    """
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    # Page with frontmatter the strict parser rejects (nested mapping)
+    (wiki / "hooks" / "broken.md").write_text(
+        "---\nnested:\n  inner: bad\n---\n# B\n"
+    )
+    # Sibling valid page that should still succeed
+    (wiki / "hooks" / "good.md").write_text(SAMPLE_PAGE.replace("Sample", "Good"))
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "x",
+        "updates": [
+            {"slug": "broken", "rationale": "should fail",
+             "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]},
+            {"slug": "good", "rationale": "should apply",
+             "ops": [{"op": "frontmatter_set", "key": "description", "value": "ok"}]},
+        ],
+        "creates": [], "deletes": [], "bidirectional_links": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                      "summary": "x", "pages_affected": ["broken", "good"]}
+    }
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(_json.dumps(plan))
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode == 0, f"applier crashed: {res.stderr}"
+    f = _json.loads(failed.read_text())
+    assert any(e["slug"] == "broken" and e["reason"] in
+               ("FrontmatterParseError", "IOError") for e in f), \
+        f"broken should be in failed.json with parse-error reason, got: {f}"
+    a = _json.loads(applied.read_text())
+    assert any(u["slug"] == "good" for u in a["updates"]), \
+        f"good should still apply, got applied.json: {a}"
+
+
+def test_cli_oserror_during_atomic_write_routes_to_failed(tmp_path):
+    """Force _atomic_write to fail by making the page parent dir read-only."""
+    import os, stat
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    (wiki / "hooks" / "ro.md").write_text(SAMPLE_PAGE)
+    (wiki / "hooks" / "ok.md").write_text(SAMPLE_PAGE.replace("Sample", "Ok"))
+    # Make the parent dir read-only so the atomic-write tempfile create fails
+    parent = wiki / "hooks"
+    original_mode = parent.stat().st_mode
+    os.chmod(parent, stat.S_IRUSR | stat.S_IXUSR)  # 0o500
+    try:
+        plan = {
+            "version": "1", "skip_reason": None, "summary": "x",
+            "updates": [
+                {"slug": "ro", "rationale": "ro fails",
+                 "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]},
+            ],
+            "creates": [], "deletes": [], "bidirectional_links": [],
+            "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                          "summary": "x", "pages_affected": ["ro"]}
+        }
+        plan_path = tmp_path / "plan.json"; plan_path.write_text(_json.dumps(plan))
+        applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+        res = _run_applier(plan_path, wiki, llake, applied, failed)
+        assert res.returncode == 0, f"applier crashed: {res.stderr}"
+        f = _json.loads(failed.read_text())
+        assert any(e["slug"] == "ro" and e["reason"] == "IOError" for e in f), \
+            f"ro should be in failed.json with IOError, got: {f}"
+    finally:
+        os.chmod(parent, original_mode)
