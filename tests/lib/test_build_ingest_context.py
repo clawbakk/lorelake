@@ -256,3 +256,101 @@ def test_changes_json_records_per_file_line_counts(tmp_path):
     # Latest commit added 2 lines, removed 0
     add_two = next(f for f in foo_files if f.get("added") == 2)
     assert add_two["removed"] == 0
+
+
+def test_select_must_read_pareto_cutoff():
+    # 5 files, total score 100, top 2 contribute 80
+    churn = [
+        {"path": "a", "commits": 1, "added": 0, "removed": 0, "score": 50.0},
+        {"path": "b", "commits": 1, "added": 0, "removed": 0, "score": 30.0},
+        {"path": "c", "commits": 1, "added": 0, "removed": 0, "score": 10.0},
+        {"path": "d", "commits": 1, "added": 0, "removed": 0, "score": 5.0},
+        {"path": "e", "commits": 1, "added": 0, "removed": 0, "score": 5.0},
+    ]
+    result = bic.select_must_read(
+        churn, range_commit_count=10, get_bytes=lambda p: 1000,
+        pareto_target=0.80, max_bytes=999_999, max_bytes_per_file=999_999,
+        multi_touch_floor=99,  # disabled for this test
+    )
+    paths = [r["path"] for r in result]
+    # Stops once cumulative >= 80% of 100
+    assert paths == ["a", "b"]
+
+
+def test_select_must_read_multi_touch_floor_overrides_pareto():
+    churn = [
+        {"path": "a", "commits": 1, "added": 0, "removed": 0, "score": 50.0},
+        {"path": "b", "commits": 1, "added": 0, "removed": 0, "score": 50.0},
+        {"path": "c", "commits": 5, "added": 0, "removed": 0, "score": 1.0},  # below pareto, but multi-touch
+    ]
+    result = bic.select_must_read(
+        churn, range_commit_count=10, get_bytes=lambda p: 1000,
+        pareto_target=0.50, max_bytes=999_999, max_bytes_per_file=999_999,
+        multi_touch_floor=3,
+    )
+    paths = [r["path"] for r in result]
+    assert "c" in paths
+
+
+def test_select_must_read_max_bytes_caps_total():
+    churn = [
+        {"path": f"f{i}", "commits": 1, "added": 0, "removed": 0, "score": 10.0 - i}
+        for i in range(10)
+    ]
+    result = bic.select_must_read(
+        churn, range_commit_count=20, get_bytes=lambda p: 50_000,
+        pareto_target=1.00, max_bytes=120_000, max_bytes_per_file=999_999,
+        multi_touch_floor=99,
+    )
+    # 50KB per file, 120KB total → at most 2 files fit
+    assert len(result) == 2
+
+
+def test_select_must_read_dynamic_max_files_floor_at_5():
+    # 4 commits in range; dynamic max = max(5, 4//4) = 5
+    churn = [
+        {"path": f"f{i}", "commits": 1, "added": 0, "removed": 0, "score": 10.0 - i}
+        for i in range(8)
+    ]
+    result = bic.select_must_read(
+        churn, range_commit_count=4, get_bytes=lambda p: 100,
+        pareto_target=1.00, max_bytes=999_999, max_bytes_per_file=999_999,
+        multi_touch_floor=99,
+    )
+    # Floor of 5 even though range is tiny
+    assert len(result) == 5
+
+
+def test_select_must_read_dynamic_max_files_scales_with_range():
+    churn = [
+        {"path": f"f{i}", "commits": 1, "added": 0, "removed": 0, "score": 100.0 - i}
+        for i in range(50)
+    ]
+    result = bic.select_must_read(
+        churn, range_commit_count=80, get_bytes=lambda p: 100,
+        pareto_target=1.00, max_bytes=999_999, max_bytes_per_file=999_999,
+        multi_touch_floor=99,
+    )
+    # 80 // 4 = 20
+    assert len(result) == 20
+
+
+def test_select_must_read_empty_input():
+    result = bic.select_must_read(
+        [], range_commit_count=5, get_bytes=lambda p: 100,
+        pareto_target=0.80, max_bytes=999_999, max_bytes_per_file=999_999,
+        multi_touch_floor=3,
+    )
+    assert result == []
+
+
+def test_select_must_read_max_bytes_per_file_truncation_does_not_skip_file():
+    # A monster file is capped per-file but still selected
+    churn = [{"path": "huge", "commits": 5, "added": 0, "removed": 0, "score": 100.0}]
+    result = bic.select_must_read(
+        churn, range_commit_count=10, get_bytes=lambda p: 1_000_000,
+        pareto_target=0.80, max_bytes=200_000, max_bytes_per_file=30_000,
+        multi_touch_floor=3,
+    )
+    assert len(result) == 1
+    assert result[0]["path"] == "huge"

@@ -238,6 +238,77 @@ def compute_file_churn(commits):
     return sorted(by_path.values(), key=lambda e: -e["score"])
 
 
+def select_must_read(churn, range_commit_count, get_bytes,
+                     pareto_target, max_bytes, max_bytes_per_file,
+                     multi_touch_floor, max_files_override=0):
+    """Select the high-priority files whose patches must be inlined into the prompt.
+
+    Algorithm:
+      - Compute dynamic max_files = max(5, range_commit_count // 4) unless
+        max_files_override > 0.
+      - Walk churn in score-descending order. For each file:
+          forced  = stats.commits >= multi_touch_floor
+          - non-forced files: stop if len(must) >= max_files OR cumulative
+            score / total >= pareto_target.
+          - byte cap (max_bytes) applies to all files; non-forced files break
+            on cap, forced files continue (smaller forced files may still fit).
+          - per-file truncation cap (max_bytes_per_file) is applied at the
+            inline stage, not here; we use min(get_bytes(path), max_bytes_per_file)
+            for budget accounting so a monster file doesn't blow the budget.
+
+    Args:
+        churn: list of dicts as produced by compute_file_churn (sorted by score desc).
+        range_commit_count: how many commits in the input range; used for dynamic max_files.
+        get_bytes: callable(path) -> int, bytes-on-disk for the file's patch.
+        pareto_target: float in (0, 1]; stop adding non-forced files when cumulative
+            score reaches this fraction of total.
+        max_bytes: total byte budget for inlined patches.
+        max_bytes_per_file: per-file truncation cap (used here for budget accounting).
+        multi_touch_floor: stats.commits >= this forces inclusion past Pareto/file caps.
+        max_files_override: if > 0, use this as max_files; otherwise compute dynamically.
+
+    Returns:
+        list of dicts (subset of churn) augmented with "priority": "must".
+    """
+    if not churn:
+        return []
+
+    if max_files_override > 0:
+        max_files = max_files_override
+    else:
+        max_files = max(5, range_commit_count // 4)
+
+    total_score = sum(c["score"] for c in churn) or 1.0
+
+    must = []
+    cumulative_score = 0.0
+    bytes_inlined = 0
+
+    for entry in churn:
+        forced = entry["commits"] >= multi_touch_floor
+
+        if not forced:
+            if len(must) >= max_files:
+                break
+            if cumulative_score / total_score >= pareto_target:
+                break
+
+        patch_size = min(get_bytes(entry["path"]), max_bytes_per_file)
+        if bytes_inlined + patch_size > max_bytes:
+            if forced:
+                continue  # try smaller forced files
+            else:
+                break
+
+        out = dict(entry)
+        out["priority"] = "must"
+        must.append(out)
+        cumulative_score += entry["score"]
+        bytes_inlined += patch_size
+
+    return must
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--project-root", required=True)
