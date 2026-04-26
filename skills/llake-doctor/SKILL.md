@@ -123,6 +123,19 @@ Record a single issue listing every missing dot-path. This becomes the forward-m
 
 Do NOT record issues for keys the user's config has but the plugin's defaults no longer ship — those are user-managed leftovers from an older plugin version. The spec is explicit about this: retired keys are left in place, the user removes them manually if they want.
 
+### Check 8.5 — `ingest.pipeline` value
+
+Read `ingest.pipeline` from `<project>/llake/config.json`. Allowed values:
+`"legacy"` (default) and `"v2"`. Anything else is a typo or stale value
+from a future plugin version.
+
+- If unset → no warning (defaults to `"legacy"` via `config.default.json`).
+- If `"legacy"` or `"v2"` → no warning.
+- Otherwise → warning: `ingest.pipeline = <value>: unknown value, expected "legacy" or "v2". The post-merge hook will fall through to the legacy code path.`
+
+This is a warning, not an error — doctor still reports the install as
+healthy if everything else passes.
+
 ### Check 8 — Orphaned install plan
 
 If `<project>/llake/.state/install-plan.md` exists, it is a leftover from a crashed or interrupted executor run. The plan is install-time only; nothing reads it after Phase 4 of the install.
