@@ -732,6 +732,45 @@ def test_cli_no_log_entry_flag_suppresses_log_md_append(tmp_path):
         _json.loads(applied.read_text())["updates"][0]["slug"] == "a"
 
 
+def test_apply_update_atomic_when_second_op_fails(tmp_path):
+    """First op (replace) succeeds in-memory; second op (append_section to
+    nonexistent heading) raises HeadingNotFound. The file on disk must be
+    byte-identical to the original (no half-applied state)."""
+    page = tmp_path / "page.md"
+    page.write_text(SAMPLE_PAGE)
+    update = {
+        "slug": "sample",
+        "rationale": "second op fails",
+        "ops": [
+            {"op": "replace", "find": "A.", "with": "AAA."},
+            {"op": "append_section", "after_heading": "## NoSuchSection",
+             "content": "this never lands\n"},
+        ],
+    }
+    with pytest.raises(applier.HeadingNotFound):
+        applier.apply_update(page, update, today="2026-04-26")
+    # File MUST be byte-identical to the original
+    assert page.read_text() == SAMPLE_PAGE
+
+
+def test_apply_update_atomic_when_third_op_fails(tmp_path):
+    """A more aggressive variant: replace, frontmatter_set, then append_section fails."""
+    page = tmp_path / "page.md"
+    page.write_text(SAMPLE_PAGE)
+    update = {
+        "slug": "sample", "rationale": "x",
+        "ops": [
+            {"op": "replace", "find": "A.", "with": "AAA."},
+            {"op": "frontmatter_set", "key": "description", "value": "Updated"},
+            {"op": "append_section", "after_heading": "## DoesNotExist",
+             "content": "lost\n"},
+        ],
+    }
+    with pytest.raises(applier.HeadingNotFound):
+        applier.apply_update(page, update, today="2026-04-26")
+    assert page.read_text() == SAMPLE_PAGE
+
+
 def test_cli_default_appends_log_entry(tmp_path):
     """Without the flag, behavior is unchanged (regression guard)."""
     llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
