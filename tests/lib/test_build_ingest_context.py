@@ -81,3 +81,51 @@ def test_changes_json_records_deletes(tmp_path):
     changes = json.loads((out_dir / "changes.json").read_text())
     file_status = {f["path"]: f["status"] for c in changes["commits"] for f in c["files"]}
     assert file_status["src/old.py"] == "D"
+
+
+def test_diffs_one_file_one_chunk(tmp_path):
+    repo = _make_repo(tmp_path)
+    sha1 = _commit_file(repo, "src/foo.py", "x\n", "initial")
+    sha2 = _commit_file(repo, "src/foo.py", "x\ny\n", "modify")
+    out_dir = tmp_path / "ctx"
+    res = _run("--project-root", repo, "--wiki-root", tmp_path / "wiki",
+               "--last-sha", sha1, "--current-sha", sha2,
+               "--include", "src/", "--out-dir", out_dir, "--diff-chunk-bytes", 100000)
+    assert res.returncode == 0
+    diffs = list((out_dir / "diffs").glob("*.patch"))
+    assert len(diffs) == 1
+    assert "src__foo.py" in diffs[0].name
+
+
+def test_diffs_split_at_hunk_boundaries(tmp_path):
+    repo = _make_repo(tmp_path)
+    initial = "\n".join(f"line {i}" for i in range(50)) + "\n"
+    sha1 = _commit_file(repo, "src/big.py", initial, "initial")
+    modified = initial.replace("line 5", "LINE 5").replace("line 30", "LINE 30")
+    sha2 = _commit_file(repo, "src/big.py", modified, "two hunks")
+    out_dir = tmp_path / "ctx"
+    res = _run("--project-root", repo, "--wiki-root", tmp_path / "wiki",
+               "--last-sha", sha1, "--current-sha", sha2,
+               "--include", "src/", "--out-dir", out_dir,
+               "--diff-chunk-bytes", 100)  # tiny → forces split
+    assert res.returncode == 0
+    chunks = sorted((out_dir / "diffs").glob("src__big.py.*.patch"))
+    assert len(chunks) >= 2
+    index = json.loads((out_dir / "diffs" / "src__big.py.index.json").read_text())
+    assert index["chunks"] == [c.name for c in chunks]
+
+
+def test_diffs_oversized_single_hunk_emits_one_chunk(tmp_path):
+    repo = _make_repo(tmp_path)
+    sha1 = _commit_file(repo, "src/x.py", "before\n", "initial")
+    sha2 = _commit_file(repo, "src/x.py",
+                        "before\n" + ("inserted line\n" * 200), "huge insert")
+    out_dir = tmp_path / "ctx"
+    res = _run("--project-root", repo, "--wiki-root", tmp_path / "wiki",
+               "--last-sha", sha1, "--current-sha", sha2,
+               "--include", "src/", "--out-dir", out_dir,
+               "--diff-chunk-bytes", 50)
+    assert res.returncode == 0
+    # The single hunk is bigger than 50 bytes, but we don't split mid-hunk.
+    files = list((out_dir / "diffs").glob("src__x.py*.patch"))
+    assert len(files) >= 1

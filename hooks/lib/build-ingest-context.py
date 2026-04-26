@@ -56,6 +56,74 @@ def commit_metadata(repo, sha, include):
     }
 
 
+def _safe_name(path):
+    return path.replace("/", "__")
+
+
+def _split_unified_diff_into_hunks(diff_text):
+    """Return [header, hunk_1, hunk_2, ...] where header is the file header
+    (lines through the last `+++` or `---`), and each hunk starts with `@@`."""
+    lines = diff_text.splitlines(keepends=True)
+    header = []
+    rest = []
+    found_first_hunk = False
+    for ln in lines:
+        if not found_first_hunk and ln.startswith("@@"):
+            found_first_hunk = True
+            rest.append(ln)
+        elif not found_first_hunk:
+            header.append(ln)
+        else:
+            rest.append(ln)
+    if not rest:
+        return ["".join(header)] if header else []
+    hunks = []
+    cur = []
+    for ln in rest:
+        if ln.startswith("@@") and cur:
+            hunks.append("".join(cur)); cur = [ln]
+        else:
+            cur.append(ln)
+    if cur:
+        hunks.append("".join(cur))
+    return ["".join(header)] + hunks
+
+
+def write_per_file_diffs(repo, files, last, current, out_dir, chunk_bytes):
+    diffs_dir = out_dir / "diffs"; diffs_dir.mkdir(parents=True, exist_ok=True)
+    for path in files:
+        diff = git(repo, "diff", f"{last}..{current}", "--", path)
+        if not diff:
+            continue
+        safe = _safe_name(path)
+        if len(diff.encode()) <= chunk_bytes:
+            (diffs_dir / f"{safe}.patch").write_text(diff)
+            continue
+        parts = _split_unified_diff_into_hunks(diff)
+        if len(parts) <= 1:
+            # No hunks (or just header) — emit as one
+            (diffs_dir / f"{safe}.patch").write_text(diff)
+            continue
+        header, hunks = parts[0], parts[1:]
+        chunks = []
+        cur = header; cur_hunks = []
+        for h in hunks:
+            tentative = cur + h
+            if len(tentative.encode()) > chunk_bytes and cur_hunks:
+                chunks.append(cur); cur = header + h; cur_hunks = [h]
+            else:
+                cur = tentative; cur_hunks.append(h)
+        if cur_hunks:
+            chunks.append(cur)
+        names = []
+        for i, ch in enumerate(chunks, start=1):
+            name = f"{safe}.{i:03d}.patch"
+            (diffs_dir / name).write_text(ch)
+            names.append(name)
+        (diffs_dir / f"{safe}.index.json").write_text(
+            json.dumps({"file": path, "chunks": names}, indent=2))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--project-root", required=True)
@@ -83,6 +151,9 @@ def main():
         "files_touched": files_touched,
     }
     (out_dir / "changes.json").write_text(json.dumps(changes, indent=2))
+
+    write_per_file_diffs(repo, files_touched, args.last_sha, args.current_sha,
+                         out_dir, args.diff_chunk_bytes)
 
 
 if __name__ == "__main__":
