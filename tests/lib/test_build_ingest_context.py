@@ -194,3 +194,49 @@ def test_churn_score_zero_lines_handled():
     # Edge: no line activity, only metadata-noise commits — still has a score
     s = bic.churn_score({"commits": 1, "added": 0, "removed": 0})
     assert s > 0
+
+
+def test_compute_file_churn_aggregates_across_commits():
+    commits = [
+        {"sha": "a", "files": [
+            {"path": "foo.py", "status": "M", "added": 10, "removed": 5},
+            {"path": "bar.py", "status": "A", "added": 20, "removed": 0},
+        ]},
+        {"sha": "b", "files": [
+            {"path": "foo.py", "status": "M", "added": 3, "removed": 2},
+        ]},
+        {"sha": "c", "files": [
+            {"path": "foo.py", "status": "M", "added": 100, "removed": 50},
+        ]},
+    ]
+    churn = bic.compute_file_churn(commits)
+    foo = next(c for c in churn if c["path"] == "foo.py")
+    bar = next(c for c in churn if c["path"] == "bar.py")
+    assert foo["commits"] == 3
+    assert foo["added"] == 113
+    assert foo["removed"] == 57
+    assert bar["commits"] == 1
+    # Sorted by score descending
+    assert churn[0]["path"] == "foo.py"
+    assert churn[1]["path"] == "bar.py"
+
+
+def test_compute_file_churn_includes_score():
+    commits = [{"sha": "a", "files": [{"path": "x", "status": "M", "added": 5, "removed": 5}]}]
+    churn = bic.compute_file_churn(commits)
+    assert "score" in churn[0]
+    assert churn[0]["score"] == bic.churn_score(churn[0])
+
+
+def test_compute_file_churn_empty_input():
+    assert bic.compute_file_churn([]) == []
+
+
+def test_compute_file_churn_handles_files_without_line_counts():
+    # Existing commit_metadata doesn't fill 'added'/'removed' yet (we add that
+    # in Task 5); compute_file_churn must default missing keys to 0.
+    commits = [{"sha": "a", "files": [{"path": "x", "status": "M"}]}]
+    churn = bic.compute_file_churn(commits)
+    assert churn[0]["commits"] == 1
+    assert churn[0]["added"] == 0
+    assert churn[0]["removed"] == 0

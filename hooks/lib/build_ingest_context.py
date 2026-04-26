@@ -187,6 +187,35 @@ def churn_score(stats):
     return commits * 10 + math.log1p(added + removed)
 
 
+def compute_file_churn(commits):
+    """Aggregate per-commit file lists into per-file churn stats.
+
+    Args:
+        commits: list of dicts as produced by commit_metadata, each with a
+            'files' list. Each file may carry 'added' / 'removed' line counts
+            (added by Task 5); missing keys default to 0.
+    Returns:
+        list of dicts: [{"path", "commits", "added", "removed", "score"}, ...]
+        sorted by score descending.
+    """
+    by_path = {}
+    for c in commits:
+        for f in c.get("files", []):
+            path = f["path"]
+            entry = by_path.setdefault(path, {
+                "path": path,
+                "commits": 0,
+                "added": 0,
+                "removed": 0,
+            })
+            entry["commits"] += 1
+            entry["added"] += f.get("added", 0)
+            entry["removed"] += f.get("removed", 0)
+    for entry in by_path.values():
+        entry["score"] = churn_score(entry)
+    return sorted(by_path.values(), key=lambda e: -e["score"])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--project-root", required=True)
