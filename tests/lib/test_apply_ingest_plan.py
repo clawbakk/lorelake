@@ -204,3 +204,72 @@ def test_apply_update_atomic_on_anchor_failure(tmp_path):
         applier.apply_update(page, update, today="2026-04-25")
     # File unchanged
     assert page.read_text() == SAMPLE_PAGE
+
+
+def test_apply_create_writes_new_page(tmp_path):
+    wiki = tmp_path / "wiki"
+    (wiki / "decisions").mkdir(parents=True)
+    create = {
+        "slug": "adr-005-foo",
+        "category": "decisions",
+        "front_matter": {"title": "ADR-005", "description": "foo",
+                          "tags": ["decisions"], "created": "2026-04-25",
+                          "updated": "2026-04-25", "status": "current",
+                          "related": []},
+        "body": "# ADR-005\n\nBody.\n",
+    }
+    applier.apply_create(wiki, create, today="2026-04-25")
+    p = wiki / "decisions" / "adr-005-foo.md"
+    assert p.exists()
+    assert "ADR-005" in p.read_text()
+
+
+def test_apply_create_already_exists_raises(tmp_path):
+    wiki = tmp_path / "wiki"
+    (wiki / "decisions").mkdir(parents=True)
+    (wiki / "decisions" / "exists.md").write_text("---\ntitle: x\n---\n")
+    create = {
+        "slug": "exists", "category": "decisions",
+        "front_matter": {"title": "X", "description": "x", "tags": [],
+                          "created": "2026-04-25", "updated": "2026-04-25",
+                          "status": "current", "related": []},
+        "body": "x",
+    }
+    with pytest.raises(applier.AlreadyExists):
+        applier.apply_create(wiki, create, today="2026-04-25")
+
+
+def test_apply_delete_removes_file_and_scrubs_related(tmp_path):
+    wiki = tmp_path / "wiki"
+    (wiki / "hooks").mkdir(parents=True)
+    (wiki / "hooks" / "old-hook.md").write_text(SAMPLE_PAGE.replace("Sample", "Old Hook"))
+    (wiki / "hooks" / "other.md").write_text(
+        "---\ntitle: Other\nrelated:\n  - \"[[old-hook]]\"\n  - \"[[keeper]]\"\n---\n# Other\n"
+    )
+    result = applier.apply_delete(wiki, "old-hook", today="2026-04-25")
+    assert not (wiki / "hooks" / "old-hook.md").exists()
+    other = (wiki / "hooks" / "other.md").read_text()
+    assert "[[old-hook]]" not in other
+    assert "[[keeper]]" in other
+    assert result.get("note") is None  # was present, real delete
+
+
+def test_apply_delete_target_already_absent_is_noop(tmp_path):
+    wiki = tmp_path / "wiki"
+    (wiki / "hooks").mkdir(parents=True)
+    result = applier.apply_delete(wiki, "ghost", today="2026-04-25")
+    assert result["note"] == "target_already_absent"
+    # Cascade is skipped (nothing to scrub).
+
+
+def test_apply_delete_surfaces_inline_link_warnings(tmp_path):
+    wiki = tmp_path / "wiki"
+    (wiki / "hooks").mkdir(parents=True)
+    (wiki / "hooks" / "doomed.md").write_text("---\ntitle: D\n---\n# D\n")
+    (wiki / "hooks" / "ref.md").write_text(
+        "---\ntitle: R\n---\n# R\n\nSee [[doomed]] for context.\nAlso [[doomed]] mentioned twice.\n"
+    )
+    result = applier.apply_delete(wiki, "doomed", today="2026-04-25")
+    links = result["dangling_inline_links"]
+    assert len(links) == 2
+    assert all(l["page"].endswith("ref.md") for l in links)

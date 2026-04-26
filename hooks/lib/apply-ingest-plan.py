@@ -157,6 +157,107 @@ def apply_update(page_path, update, today, llake_root=None, wiki_root=None):
     _atomic_write(page_path, new_text)
 
 
+import re as _re
+
+
+class AlreadyExists(ApplyError):
+    reason = "AlreadyExists"
+
+
+class DeleteTargetMissing(ApplyError):
+    """Raised internally; converted to a no-op success at the orchestration layer."""
+    reason = "DeleteTargetMissing"
+
+
+def apply_create(wiki_root, create, today, llake_root=None):
+    """Write a new wiki page under <wiki_root>/<category>/<slug>.md."""
+    target = wiki_root / create["category"] / f"{create['slug']}.md"
+    if llake_root is not None:
+        check_write_path(target, llake_root, wiki_root)
+    if target.exists():
+        raise AlreadyExists(f"target already exists: {target}")
+    fm = dict(create["front_matter"])
+    fm["updated"] = today
+    text = "---\n" + frontmatter.serialize(fm) + "---\n" + create["body"]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(target, text)
+
+
+def _scrub_related(wiki_root, deleted_slug):
+    """Remove `deleted_slug` from every wiki page's frontmatter `related:` list.
+    Idempotent. Returns count of pages modified."""
+    target_token = f"[[{deleted_slug}]]"
+    count = 0
+    for page in wiki_root.rglob("*.md"):
+        try:
+            text = page.read_text()
+        except (IOError, OSError):
+            continue
+        fm_text, body = frontmatter.split(text)
+        if not fm_text:
+            continue
+        try:
+            fm_dict = frontmatter.parse(fm_text)
+        except frontmatter.FrontmatterParseError:
+            continue
+        related = fm_dict.get("related") or []
+        if target_token not in related:
+            continue
+        fm_dict["related"] = [r for r in related if r != target_token]
+        new_text = "---\n" + frontmatter.serialize(fm_dict) + "---\n" + body
+        _atomic_write(page, new_text)
+        count += 1
+    return count
+
+
+def _scan_inline_links(wiki_root, deleted_slug):
+    """Return a list of {slug, page, line, line_text} for every body occurrence
+    of [[<deleted_slug>]]."""
+    pattern = _re.compile(r"\[\[" + _re.escape(deleted_slug) + r"\]\]")
+    out = []
+    for page in wiki_root.rglob("*.md"):
+        try:
+            text = page.read_text()
+        except (IOError, OSError):
+            continue
+        _, body = frontmatter.split(text)
+        for lineno, line in enumerate(body.splitlines(), start=1):
+            if pattern.search(line):
+                # Multiple matches on the same line still surface as one entry per match.
+                for _ in pattern.findall(line):
+                    out.append({
+                        "slug": deleted_slug,
+                        "page": str(page),
+                        "line": lineno,
+                        "line_text": line,
+                    })
+    return out
+
+
+def apply_delete(wiki_root, slug, today, llake_root=None):
+    """Remove the page for `slug` from the wiki. Returns a dict describing what happened.
+
+    On no-op (target absent): returns {"note": "target_already_absent", "dangling_inline_links": []}.
+    On real delete: returns {"dangling_inline_links": [...]}; cascades scrub the slug
+    from every other page's `related:` and surface inline [[slug]] mentions as warnings.
+    """
+    # Resolve the page by walking the wiki for <slug>.md.
+    matches = [p for p in wiki_root.rglob(f"{slug}.md") if p.is_file()]
+    if not matches:
+        return {"note": "target_already_absent", "dangling_inline_links": []}
+    if len(matches) > 1:
+        # Two pages with the same slug is a wiki integrity bug, but not the applier's
+        # to resolve. Pick the first deterministically and surface in the result.
+        matches.sort()
+    target = matches[0]
+    if llake_root is not None:
+        check_write_path(target, llake_root, wiki_root)
+    target.unlink()
+    _scrub_related(wiki_root, slug)
+    inline = _scan_inline_links(wiki_root, slug)
+    return {"dangling_inline_links": inline}
+
+
 def apply_replace_ops(original, ops):
     """Apply a list of {op: replace, find, with} ops to `original` content.
 
