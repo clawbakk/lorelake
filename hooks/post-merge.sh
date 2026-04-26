@@ -77,6 +77,15 @@ if [ "$INGEST_ENABLED" = "false" ]; then
   exit 0
 fi
 
+# Pipeline switch — v2 hands off to a separate orchestrator after the shared
+# setup completes (SHA range, INCLUDE_PATHS array, branch validation). Default
+# "legacy" falls through to the existing implementation below unchanged.
+INGEST_PIPELINE=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.pipeline")
+USE_INGEST_V2=0
+if [ "$INGEST_PIPELINE" = "v2" ]; then
+  USE_INGEST_V2=1
+fi
+
 # Read ingest settings from config
 MAX_BUDGET_USD=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.maxBudgetUsd")
 MAX_TIMEOUT_SEC=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.timeoutSeconds")
@@ -148,6 +157,37 @@ if ! git -C "$PROJECT_ROOT" log --oneline "$LAST_SHA..$CURRENT_SHA" > /dev/null 
   # If the range is invalid (e.g., force push), reset to current HEAD
   echo "$CURRENT_SHA" > "$SHA_FILE"
   hook_end "skipped: invalid range, reset SHA to $CURRENT_SHA" "$LOG_FILE"
+  exit 0
+fi
+
+# v2 branch: hand off to the v2 orchestrator before legacy setup runs.
+# v2 owns its own agent ID, dirs, watchdog, prompt rendering, and finalize —
+# nothing below this branch executes when pipeline == "v2".
+if [ "$USE_INGEST_V2" = "1" ]; then
+  # shellcheck source=lib/ingest-v2.sh
+  source "$LIB_DIR/ingest-v2.sh"
+  V2_TIMEOUT=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v2.timeoutSeconds")
+  (
+    source "$LIB_DIR/agent-run.sh"
+    MY_PID=$(sh -c 'echo $PPID')
+    HOOKS_LOG_FILE="$LOG_FILE"
+    setup_kill_trap
+    (
+      sleep "$V2_TIMEOUT"
+      if kill -0 "$MY_PID" 2>/dev/null; then kill -USR1 "$MY_PID" 2>/dev/null; fi
+    ) &
+    WATCHDOG_PID=$!
+    run_ingest_v2
+    kill "$WATCHDOG_PID" 2>/dev/null
+    wait "$WATCHDOG_PID" 2>/dev/null
+  ) &
+  BG_PID=$!
+  if [ "${LLAKE_POST_MERGE_SYNC:-}" = "1" ]; then
+    wait "$BG_PID" 2>/dev/null
+  else
+    disown "$BG_PID"
+  fi
+  hook_end "done: spawned v2 agent (range: $COMMIT_RANGE, timeout: ${V2_TIMEOUT}s)" "$LOG_FILE"
   exit 0
 fi
 
