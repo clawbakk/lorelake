@@ -242,3 +242,107 @@ strategy. The decision references the existing pages `rate-limiter` and
   }
 }
 ```
+
+---
+
+## Example 5 — Multi-commit range with one skipped commit
+
+**Code change:** Three commits land together:
+
+1. `a1b2c3d` — adds a new `RetryPolicy` class in `src/infra/retry.py` with
+   configurable exponential backoff. Adds unit tests.
+2. `e4f5a6b` — renames `src/infra/http_helpers.py` →
+   `src/infra/http_client.py` as part of a planned import-path cleanup
+   (Task 7 of the v2 fixes plan). No new behaviour, no call-site changes.
+3. `7c8d9e0` — updates the `RetryPolicy` to respect a per-environment
+   `MAX_RETRY_BUDGET_MS` config key read from the environment; adds the key
+   to `docs/env-vars.md` in the source repo.
+
+**Wiki implication:**
+- Create a new `infra-retry-policy` page documenting the class, its
+   configuration surface, and the backoff algorithm.
+- Update the existing `infra-overview` page to reference the new page.
+- Update `config-env-vars` to document `MAX_RETRY_BUDGET_MS`.
+- Skip the rename commit — it is a pure import-path refactor; all call
+   sites were updated automatically and no wiki reference uses the old path.
+
+**Plan:**
+
+```json
+{
+  "version": "1",
+  "skip_reason": null,
+  "summary": "Document new RetryPolicy class and MAX_RETRY_BUDGET_MS config key.",
+  "updates": [
+    {
+      "slug": "infra-overview",
+      "rationale": "Surface the new RetryPolicy in the infrastructure overview.",
+      "ops": [
+        {
+          "op": "append_section",
+          "after_heading": "## Components",
+          "content": "- [[infra-retry-policy]] — exponential backoff with per-environment budget cap.\n"
+        },
+        {
+          "op": "frontmatter_add_related",
+          "items": ["[[infra-retry-policy]]"]
+        }
+      ]
+    },
+    {
+      "slug": "config-env-vars",
+      "rationale": "Document the new MAX_RETRY_BUDGET_MS variable added in commit 7c8d9e0.",
+      "ops": [
+        {
+          "op": "append_section",
+          "after_heading": "## Variables",
+          "content": "### MAX_RETRY_BUDGET_MS\n\nCaps the total wall-clock time (ms) that the `RetryPolicy` will spend across all retry attempts for a single call. Defaults to `5000`. See [[infra-retry-policy]].\n"
+        }
+      ]
+    }
+  ],
+  "creates": [
+    {
+      "slug": "infra-retry-policy",
+      "category": "components",
+      "front_matter": {
+        "title": "RetryPolicy — exponential backoff",
+        "description": "Configurable exponential-backoff retry wrapper used across all infra HTTP calls.",
+        "tags": ["components", "infra", "reliability"],
+        "created": "2026-04-26",
+        "updated": "2026-04-26",
+        "status": "current",
+        "related": ["[[infra-overview]]", "[[config-env-vars]]"]
+      },
+      "body": "# RetryPolicy — exponential backoff\n\n## What it does\n\n`RetryPolicy` in `src/infra/retry.py` wraps any callable with configurable exponential backoff. It reads `MAX_RETRY_BUDGET_MS` from the environment to cap total retry wall-clock time.\n\n## Configuration\n\n| Parameter | Default | Notes |\n|---|---|---|\n| `max_attempts` | 4 | Hard ceiling on retry count |\n| `base_delay_ms` | 200 | First retry delay |\n| `jitter` | `True` | Adds ±10% to each delay |\n| `MAX_RETRY_BUDGET_MS` (env) | 5000 | Total budget; abort if exceeded |\n\n## See also\n\n- [[infra-overview]]\n- [[config-env-vars]]\n"
+    }
+  ],
+  "deletes": [],
+  "bidirectional_links": [
+    { "a": "infra-retry-policy", "b": "infra-overview" },
+    { "a": "infra-retry-policy", "b": "config-env-vars" }
+  ],
+  "commits_addressed": [
+    {
+      "sha": "a1b2c3d",
+      "pages": ["infra-retry-policy", "infra-overview"]
+    },
+    {
+      "sha": "7c8d9e0",
+      "pages": ["config-env-vars", "infra-retry-policy"]
+    }
+  ],
+  "commits_skipped": [
+    {
+      "sha": "e4f5a6b",
+      "reason": "Pure rename of importable lib files (Task 7 of the v2 fixes plan); no semantic change to document — the rename is invisible at the call sites."
+    }
+  ],
+  "log_entry": {
+    "operation": "ingest",
+    "commit_range": "a1b2c3d..7c8d9e0",
+    "summary": "Document new RetryPolicy class and MAX_RETRY_BUDGET_MS config key.",
+    "pages_affected": ["infra-retry-policy", "infra-overview", "config-env-vars"]
+  }
+}
+```

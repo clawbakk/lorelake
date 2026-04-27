@@ -383,7 +383,8 @@ REPO_ROOT_AIP = Path(__file__).resolve().parents[2]
 APPLIER_CLI = REPO_ROOT_AIP / "hooks" / "lib" / "apply_ingest_plan.py"
 
 
-def _run_applier(plan_path, wiki, llake, applied, failed, today="2026-04-25"):
+def _run_applier(plan_path, wiki, llake, applied, failed, today="2026-04-25",
+                 changes_json=None):
     cmd = ["python3", str(APPLIER_CLI),
            "--plan", str(plan_path),
            "--wiki-root", str(wiki),
@@ -391,7 +392,18 @@ def _run_applier(plan_path, wiki, llake, applied, failed, today="2026-04-25"):
            "--applied-out", str(applied),
            "--failed-out", str(failed),
            "--today", today]
+    if changes_json is not None:
+        cmd += ["--changes-json", str(changes_json)]
     return _sub.run(cmd, capture_output=True, text=True)
+
+
+def _make_minimal_llake(tmp_path):
+    """Build a minimal llake/wiki structure. Returns (llake_root, wiki_root)."""
+    llake = tmp_path / "llake"
+    wiki = llake / "wiki"
+    (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    return llake, wiki
 
 
 def _write_log_md(llake):
@@ -408,6 +420,7 @@ def test_cli_applies_simple_update(tmp_path):
         "updates": [{"slug": "a", "rationale": "x",
                       "ops": [{"op": "frontmatter_set", "key": "description", "value": "Updated."}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                        "summary": "y", "pages_affected": ["a"]}
     }
@@ -432,6 +445,7 @@ def test_cli_records_anchor_failure_continues_others(tmp_path):
             {"slug": "b", "rationale": "ok", "ops": [{"op": "frontmatter_set", "key": "status", "value": "draft"}]},
         ],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                        "summary": "x", "pages_affected": ["a", "b"]}
     }
@@ -463,6 +477,7 @@ def test_cli_appends_log_entry(tmp_path):
         "updates": [{"slug": "a", "rationale": "x",
                       "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                        "summary": "Did the thing", "pages_affected": ["a"]}
     }
@@ -483,6 +498,7 @@ def test_cli_skip_reason_writes_skip_log_entry(tmp_path):
         "version": "1", "skip_reason": "no relevant changes",
         "summary": "n/a", "updates": [], "creates": [], "deletes": [],
         "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                        "summary": "n/a", "pages_affected": []}
     }
@@ -505,6 +521,7 @@ def test_cli_partial_failure_writes_inline_failure_list(tmp_path):
         "updates": [{"slug": "broken", "rationale": "anchor missing",
                       "ops": [{"op": "replace", "find": "NOT_THERE", "with": "z"}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                        "summary": "x", "pages_affected": ["broken"]}
     }
@@ -530,6 +547,7 @@ def test_bidirectional_link_skipped_when_partner_in_deletes(tmp_path):
         "updates": [], "creates": [],
         "deletes": [{"slug": "doomed", "rationale": "removed"}],
         "bidirectional_links": [{"a": "live", "b": "doomed"}],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                        "summary": "x", "pages_affected": ["doomed"]}
     }
@@ -552,6 +570,7 @@ def test_cli_bidir_ghost_slug_holds_cursor(tmp_path):
         "version": "1", "skip_reason": None, "summary": "x",
         "updates": [], "creates": [], "deletes": [],
         "bidirectional_links": [{"a": "ghost-1", "b": "ghost-2"}],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                        "summary": "x", "pages_affected": []}
     }
@@ -586,6 +605,7 @@ def test_cli_malformed_frontmatter_routes_to_failed_json(tmp_path):
              "ops": [{"op": "frontmatter_set", "key": "description", "value": "ok"}]},
         ],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                       "summary": "x", "pages_affected": ["broken", "good"]}
     }
@@ -621,6 +641,7 @@ def test_cli_oserror_during_atomic_write_routes_to_failed(tmp_path):
                  "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]},
             ],
             "creates": [], "deletes": [], "bidirectional_links": [],
+            "commits_addressed": [], "commits_skipped": [],
             "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                           "summary": "x", "pages_affected": ["ro"]}
         }
@@ -708,6 +729,7 @@ def test_cli_no_log_entry_flag_suppresses_log_md_append(tmp_path):
         "updates": [{"slug": "a", "rationale": "x",
                      "ops": [{"op": "frontmatter_set", "key": "description", "value": "z"}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                       "summary": "second pass", "pages_affected": ["a"]}
     }
@@ -781,6 +803,7 @@ def test_cli_default_appends_log_entry(tmp_path):
         "updates": [{"slug": "a", "rationale": "x",
                      "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                       "summary": "first pass", "pages_affected": ["a"]}
     }
@@ -801,6 +824,7 @@ def test_cli_strips_json_fences(tmp_path):
         "updates": [{"slug": "a", "rationale": "x",
                      "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                       "summary": "fenced", "pages_affected": ["a"]}
     }
@@ -821,6 +845,7 @@ def test_cli_strips_bare_fences(tmp_path):
         "updates": [{"slug": "a", "rationale": "x",
                      "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                       "summary": "bare", "pages_affected": ["a"]}
     }
@@ -841,6 +866,7 @@ def test_cli_extracts_balanced_json_from_prose(tmp_path):
         "updates": [{"slug": "a", "rationale": "x",
                      "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
         "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [], "commits_skipped": [],
         "log_entry": {"operation": "ingest", "commit_range": "abc..def",
                       "summary": "prose", "pages_affected": ["a"]}
     }
@@ -931,3 +957,147 @@ def test_apply_update_into_discussions_rejected(tmp_path):
                              llake_root=llake, wiki_root=wiki)
     # File unchanged
     assert page.read_text() == SAMPLE_PAGE
+
+
+def test_applier_rejects_plan_missing_commits_from_range(tmp_path):
+    """Plan that lists fewer commits than `changes.json` is rejected; cursor held."""
+    llake_root, wiki_root = _make_minimal_llake(tmp_path)
+    changes = {
+        "range": "abc1234..def5678",
+        "commits": [
+            {"sha": "abc1234abc1234abc1234abc1234abc1234abc1", "short": "abc1234",
+             "files": []},
+            {"sha": "def5678def5678def5678def5678def5678def5", "short": "def5678",
+             "files": []},
+        ],
+        "files_touched": [],
+    }
+    changes_path = tmp_path / "changes.json"
+    changes_path.write_text(_json.dumps(changes))
+
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "x",
+        "updates": [], "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [{"sha": "abc1234", "pages": []}],
+        "commits_skipped": [],  # def5678 is uncovered
+        "log_entry": {"operation": "ingest", "commit_range": "abc1234..def5678",
+                      "summary": "x", "pages_affected": []},
+    }
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(_json.dumps(plan))
+
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    rc, _, err = (lambda r: (r.returncode, r.stdout, r.stderr))(
+        _run_applier(plan_path, wiki_root, llake_root, applied, failed,
+                     changes_json=changes_path))
+    assert rc != 0
+    assert "def5678" in err
+    assert "uncovered" in err.lower() or "missing" in err.lower()
+
+
+def test_applier_rejects_plan_referencing_unknown_commit(tmp_path):
+    """A SHA listed in the plan but not in the range is rejected."""
+    llake_root, wiki_root = _make_minimal_llake(tmp_path)
+    changes = {
+        "range": "abc1234..def5678",
+        "commits": [
+            {"sha": "abc1234abc1234abc1234abc1234abc1234abc1", "short": "abc1234",
+             "files": []},
+        ],
+        "files_touched": [],
+    }
+    changes_path = tmp_path / "changes.json"
+    changes_path.write_text(_json.dumps(changes))
+
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "x",
+        "updates": [], "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [
+            {"sha": "abc1234", "pages": []},
+            {"sha": "9999999", "pages": []},  # not in range
+        ],
+        "commits_skipped": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc1234..def5678",
+                      "summary": "x", "pages_affected": []},
+    }
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(_json.dumps(plan))
+
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    rc, _, err = (lambda r: (r.returncode, r.stdout, r.stderr))(
+        _run_applier(plan_path, wiki_root, llake_root, applied, failed,
+                     changes_json=changes_path))
+    assert rc != 0
+    assert "9999999" in err
+
+
+def test_applier_accepts_full_coverage(tmp_path):
+    llake_root, wiki_root = _make_minimal_llake(tmp_path)
+    changes = {
+        "range": "abc1234..def5678",
+        "commits": [
+            {"sha": "abc1234abc1234abc1234abc1234abc1234abc1", "short": "abc1234",
+             "files": []},
+            {"sha": "def5678def5678def5678def5678def5678def5", "short": "def5678",
+             "files": []},
+        ],
+        "files_touched": [],
+    }
+    changes_path = tmp_path / "changes.json"
+    changes_path.write_text(_json.dumps(changes))
+
+    plan = {
+        "version": "1", "skip_reason": None, "summary": "x",
+        "updates": [], "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [{"sha": "abc1234", "pages": []}],
+        "commits_skipped": [{"sha": "def5678", "reason": "rename"}],
+        "log_entry": {"operation": "ingest", "commit_range": "abc1234..def5678",
+                      "summary": "x", "pages_affected": []},
+    }
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(_json.dumps(plan))
+
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    rc, _, err = (lambda r: (r.returncode, r.stdout, r.stderr))(
+        _run_applier(plan_path, wiki_root, llake_root, applied, failed,
+                     changes_json=changes_path))
+    assert rc == 0, err
+
+
+def test_applier_skip_plan_bypasses_changes_json_check(tmp_path):
+    """Skip plan with empty commits_addressed/skipped + --changes-json must succeed."""
+    llake_root, wiki_root = _make_minimal_llake(tmp_path)
+    changes = {
+        "range": "abc1234..def5678",
+        "commits": [
+            {"sha": "abc1234abc1234abc1234abc1234abc1234abc1", "short": "abc1234",
+             "files": []},
+            {"sha": "def5678def5678def5678def5678def5678def5", "short": "def5678",
+             "files": []},
+        ],
+        "files_touched": [],
+    }
+    changes_path = tmp_path / "changes.json"
+    changes_path.write_text(_json.dumps(changes))
+
+    plan = {
+        "version": "1",
+        "skip_reason": "only fixture whitespace changed",
+        "summary": "n/a",
+        "updates": [], "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [],
+        "commits_skipped": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc1234..def5678",
+                      "summary": "n/a", "pages_affected": []},
+    }
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(_json.dumps(plan))
+
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    rc, _, err = (lambda r: (r.returncode, r.stdout, r.stderr))(
+        _run_applier(plan_path, wiki_root, llake_root, applied, failed,
+                     changes_json=changes_path))
+    assert rc == 0, f"skip plan should succeed, got rc={rc}, err={err}"
+    # log.md should record the skip
+    log_text = (llake_root / "log.md").read_text()
+    assert "skipped" in log_text.lower() or "fixture whitespace" in log_text

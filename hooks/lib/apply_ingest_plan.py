@@ -539,6 +539,11 @@ def main():
     ap.add_argument("--no-log-entry", action="store_true",
                     help="Skip appending to log.md. Used by the orchestrator on the fix-pass "
                          "invocation so a single ingest run produces a single log entry.")
+    ap.add_argument("--changes-json",
+                    help="Path to context/changes.json. When set, the applier "
+                         "verifies that commits_addressed ∪ commits_skipped equals "
+                         "the commit range. When unset (e.g. fixer pass), the check "
+                         "is skipped — fixer plans only carry the failed-update slice.")
     args = ap.parse_args()
 
     llake_root = Path(args.llake_root)
@@ -568,6 +573,77 @@ def main():
             print(e, file=sys.stderr)
         sys.exit(1)
 
+    # Skip-reason early return must come BEFORE the --changes-json cross-check.
+    # A skip plan has empty commits_addressed/skipped (by spec) — the cross-check
+    # would incorrectly flag every commit in the range as uncovered. Schema
+    # validation still runs above, so commits_addressed/commits_skipped must still
+    # be present (as empty arrays) to pass schema; but the cross-check is bypassed.
+    if plan.get("skip_reason"):
+        Path(args.applied_out).write_text(json.dumps(
+            {"updates": [], "creates": [], "deletes": [], "bidirectional_links": []}))
+        Path(args.failed_out).write_text("[]")
+        if not args.no_log_entry:
+            _append_log_entry(llake_root, args.today, plan["log_entry"],
+                              has_failures=False, skip_reason=plan["skip_reason"])
+        return 0
+
+    # Per-commit accountability (intervention B). Skipped on the fixer pass
+    # because that plan only covers the failed-update slice, not the whole range.
+    if args.changes_json:
+        try:
+            changes = json.loads(Path(args.changes_json).read_text())
+        except (IOError, OSError, json.JSONDecodeError) as e:
+            print(f"apply_ingest_plan: cannot read --changes-json {args.changes_json}: {e}",
+                  file=sys.stderr)
+            sys.exit(1)
+        # Use the 'short' SHAs as canonical because that's what the planner sees in
+        # changes.json. We also accept full SHAs that prefix-match a known short.
+        expected_shorts = {c["short"] for c in changes.get("commits", [])}
+        expected_full = {c["sha"] for c in changes.get("commits", [])}
+
+        def _normalize(sha):
+            if sha in expected_shorts:
+                return sha
+            if sha in expected_full:
+                # Map full back to short
+                for c in changes["commits"]:
+                    if c["sha"] == sha:
+                        return c["short"]
+            # Prefix match — planner may have used a longer-than-short SHA
+            for short in expected_shorts:
+                if sha.startswith(short) or short.startswith(sha):
+                    return short
+            return None
+
+        addressed_norm = set()
+        skipped_norm = set()
+        unknown = []
+        for entry in plan["commits_addressed"]:
+            n = _normalize(entry["sha"])
+            if n is None:
+                unknown.append(entry["sha"])
+            else:
+                addressed_norm.add(n)
+        for entry in plan["commits_skipped"]:
+            n = _normalize(entry["sha"])
+            if n is None:
+                unknown.append(entry["sha"])
+            else:
+                skipped_norm.add(n)
+        if unknown:
+            for sha in unknown:
+                print(f"apply_ingest_plan: commit {sha!r} not in range "
+                      f"{changes['range']}", file=sys.stderr)
+            sys.exit(1)
+        uncovered = expected_shorts - addressed_norm - skipped_norm
+        if uncovered:
+            print(f"apply_ingest_plan: {len(uncovered)} commits in range "
+                  f"{changes['range']} are uncovered (missing from "
+                  f"commits_addressed and commits_skipped):", file=sys.stderr)
+            for sha in sorted(uncovered):
+                print(f"  - {sha}", file=sys.stderr)
+            sys.exit(1)
+
     # Bidirectional-link existence check (treated as schema-level — cursor held on
     # failure). The plan_schema validator can't see the wiki; the CLI can.
     known_slugs = {p.stem for p in wiki_root.rglob("*.md")} | {c["slug"] for c in plan["creates"]}
@@ -584,15 +660,6 @@ def main():
         for e in ref_errors:
             print(e, file=sys.stderr)
         sys.exit(1)
-
-    if plan.get("skip_reason"):
-        Path(args.applied_out).write_text(json.dumps(
-            {"updates": [], "creates": [], "deletes": [], "bidirectional_links": []}))
-        Path(args.failed_out).write_text("[]")
-        if not args.no_log_entry:
-            _append_log_entry(llake_root, args.today, plan["log_entry"],
-                              has_failures=False, skip_reason=plan["skip_reason"])
-        return 0
 
     applied = {"updates": [], "creates": [], "deletes": [], "bidirectional_links": []}
     failed = []

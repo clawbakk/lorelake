@@ -56,8 +56,9 @@ test_v2_clean_run() {
   cd "$proj"
   add_src_commit "$proj" "tweak"
   local CURRENT_SHA; CURRENT_SHA=$(git -C "$proj" rev-parse HEAD)
+  local SHORT_SHA; SHORT_SHA=$(git -C "$proj" rev-parse --short HEAD)
   local PLAN_INLINE
-  PLAN_INLINE='{"version":"1","skip_reason":null,"summary":"trivial","updates":[],"creates":[],"deletes":[],"bidirectional_links":[],"log_entry":{"operation":"ingest","commit_range":"r","summary":"t","pages_affected":[]}}'
+  PLAN_INLINE="{\"version\":\"1\",\"skip_reason\":null,\"summary\":\"trivial\",\"updates\":[],\"creates\":[],\"deletes\":[],\"bidirectional_links\":[],\"commits_addressed\":[{\"sha\":\"$SHORT_SHA\",\"pages\":[]}],\"commits_skipped\":[],\"log_entry\":{\"operation\":\"ingest\",\"commit_range\":\"r\",\"summary\":\"t\",\"pages_affected\":[]}}"
   PATH="$STUB_BIN:$PATH" \
     LLAKE_STUB_MODE=ingest-v2-planner \
     LLAKE_STUB_PLAN_INLINE="$PLAN_INLINE" \
@@ -67,6 +68,17 @@ test_v2_clean_run() {
   assert_eq "v2_clean_exit" "0" "$rc"
   local sha_now; sha_now=$(cat "$proj/llake/last-ingest-sha")
   assert_eq "v2_cursor_advanced" "$CURRENT_SHA" "$sha_now"
+
+  # The high-churn list must be written even on small ranges (file always
+  # present; may be empty when nothing qualifies).
+  local AGENT_DIR_GLOB; AGENT_DIR_GLOB=$(ls -d "$proj/llake/.state/agents/"* 2>/dev/null | head -1)
+  if [ -f "$AGENT_DIR_GLOB/context/file_churn.json" ]; then PASS=$((PASS+1))
+  else FAIL=$((FAIL+1)); FAILED_NAMES+=("v2_file_churn_json_present")
+       echo "  FAIL [v2_file_churn_json_present]: $AGENT_DIR_GLOB/context/file_churn.json missing"; fi
+  if [ -f "$AGENT_DIR_GLOB/context/must-read-patches.txt" ]; then PASS=$((PASS+1))
+  else FAIL=$((FAIL+1)); FAILED_NAMES+=("v2_must_read_patches_present")
+       echo "  FAIL [v2_must_read_patches_present]: $AGENT_DIR_GLOB/context/must-read-patches.txt missing"; fi
+
   cd "$REPO_ROOT"
 }
 
@@ -117,7 +129,7 @@ json.dump(c, open(p, 'w'), indent=2)
   PATH="$STUB_BIN:$PATH" \
     LLAKE_STUB_MODE=ingest-v2-planner \
     LLAKE_STUB_SLEEP_SECONDS=5 \
-    LLAKE_STUB_PLAN_INLINE='{"version":"1","skip_reason":null,"summary":"x","updates":[],"creates":[],"deletes":[],"bidirectional_links":[],"log_entry":{"operation":"ingest","commit_range":"r","summary":"t","pages_affected":[]}}' \
+    LLAKE_STUB_PLAN_INLINE='{"version":"1","skip_reason":null,"summary":"x","updates":[],"creates":[],"deletes":[],"bidirectional_links":[],"commits_addressed":[],"commits_skipped":[],"log_entry":{"operation":"ingest","commit_range":"r","summary":"t","pages_affected":[]}}' \
     LLAKE_POST_MERGE_SYNC=1 \
     bash "$REPO_ROOT/hooks/post-merge.sh" || true
   local sha_now; sha_now=$(cat "$proj/llake/last-ingest-sha")
@@ -191,18 +203,13 @@ Original body.
 PAGE
 
   echo "// noop" >> "$proj/src/foo.py" && git -C "$proj" add . && git -C "$proj" commit -q -m "x"
+  local FIXER_SHA; FIXER_SHA=$(git -C "$proj" rev-parse --short HEAD)
 
   # First plan: anchor doesn't exist → AnchorNotFound
-  PLAN_1='{"version":"1","skip_reason":null,"summary":"first",
-"updates":[{"slug":"foo","rationale":"r","ops":[{"op":"replace","find":"NOT_THERE","with":"x"}]}],
-"creates":[],"deletes":[],"bidirectional_links":[],
-"log_entry":{"operation":"ingest","commit_range":"r","summary":"first","pages_affected":["foo"]}}'
+  PLAN_1="{\"version\":\"1\",\"skip_reason\":null,\"summary\":\"first\",\"updates\":[{\"slug\":\"foo\",\"rationale\":\"r\",\"ops\":[{\"op\":\"replace\",\"find\":\"NOT_THERE\",\"with\":\"x\"}]}],\"creates\":[],\"deletes\":[],\"bidirectional_links\":[],\"commits_addressed\":[{\"sha\":\"$FIXER_SHA\",\"pages\":[\"foo\"]}],\"commits_skipped\":[],\"log_entry\":{\"operation\":\"ingest\",\"commit_range\":\"r\",\"summary\":\"first\",\"pages_affected\":[\"foo\"]}}"
 
-  # Fix plan: anchor that DOES exist → success
-  PLAN_2='{"version":"1","skip_reason":null,"summary":"fix",
-"updates":[{"slug":"foo","rationale":"corrected","ops":[{"op":"replace","find":"Original body.","with":"Fixed body."}]}],
-"creates":[],"deletes":[],"bidirectional_links":[],
-"log_entry":{"operation":"ingest","commit_range":"r","summary":"fix","pages_affected":["foo"]}}'
+  # Fix plan: anchor that DOES exist → success (fixer pass; no --changes-json check)
+  PLAN_2='{"version":"1","skip_reason":null,"summary":"fix","updates":[{"slug":"foo","rationale":"corrected","ops":[{"op":"replace","find":"Original body.","with":"Fixed body."}]}],"creates":[],"deletes":[],"bidirectional_links":[],"commits_addressed":[],"commits_skipped":[],"log_entry":{"operation":"ingest","commit_range":"r","summary":"fix","pages_affected":["foo"]}}'
 
   PATH="$STUB_BIN:$PATH" \
     LLAKE_STUB_MODE=ingest-v2-planner \
@@ -258,17 +265,12 @@ Body.
 PAGE
 
   echo "// noop" >> "$proj/src/foo.py" && git -C "$proj" add . && git -C "$proj" commit -q -m "x"
+  local FAILURE_SHA; FAILURE_SHA=$(git -C "$proj" rev-parse --short HEAD)
 
-  PLAN_1='{"version":"1","skip_reason":null,"summary":"first",
-"updates":[{"slug":"foo","rationale":"r","ops":[{"op":"replace","find":"NOT_THERE","with":"x"}]}],
-"creates":[],"deletes":[],"bidirectional_links":[],
-"log_entry":{"operation":"ingest","commit_range":"r","summary":"first","pages_affected":["foo"]}}'
+  PLAN_1="{\"version\":\"1\",\"skip_reason\":null,\"summary\":\"first\",\"updates\":[{\"slug\":\"foo\",\"rationale\":\"r\",\"ops\":[{\"op\":\"replace\",\"find\":\"NOT_THERE\",\"with\":\"x\"}]}],\"creates\":[],\"deletes\":[],\"bidirectional_links\":[],\"commits_addressed\":[{\"sha\":\"$FAILURE_SHA\",\"pages\":[\"foo\"]}],\"commits_skipped\":[],\"log_entry\":{\"operation\":\"ingest\",\"commit_range\":\"r\",\"summary\":\"first\",\"pages_affected\":[\"foo\"]}}"
 
-  # Fix plan: still wrong → fix pass also produces failed.json
-  PLAN_2='{"version":"1","skip_reason":null,"summary":"fix",
-"updates":[{"slug":"foo","rationale":"r","ops":[{"op":"replace","find":"ALSO_NOT_THERE","with":"y"}]}],
-"creates":[],"deletes":[],"bidirectional_links":[],
-"log_entry":{"operation":"ingest","commit_range":"r","summary":"fix","pages_affected":["foo"]}}'
+  # Fix plan: still wrong → fix pass also produces failed.json (no --changes-json on fixer)
+  PLAN_2='{"version":"1","skip_reason":null,"summary":"fix","updates":[{"slug":"foo","rationale":"r","ops":[{"op":"replace","find":"ALSO_NOT_THERE","with":"y"}]}],"creates":[],"deletes":[],"bidirectional_links":[],"commits_addressed":[],"commits_skipped":[],"log_entry":{"operation":"ingest","commit_range":"r","summary":"fix","pages_affected":["foo"]}}'
 
   PATH="$STUB_BIN:$PATH" \
     LLAKE_STUB_MODE=ingest-v2-planner \
@@ -338,6 +340,49 @@ test_empty_plan_file_holds_cursor() {
   cd "$REPO_ROOT"
 }
 
+# Test: --changes-json coverage check — plan covers only one of two commits → cursor held
+test_v2_coverage_fail_holds_cursor() {
+  local proj; proj=$(mkproject "main")
+  TMP_PROJECTS+=("$proj")
+  set_pipeline_v2 "$proj"
+  cd "$proj"
+
+  # Two commits in range (so changes.json will have 2 entries)
+  add_src_commit "$proj" "commit-alpha"
+  add_src_commit "$proj" "commit-beta"
+  local CURRENT_SHA; CURRENT_SHA=$(git -C "$proj" rev-parse HEAD)
+  local INITIAL_SHA; INITIAL_SHA=$(cat "$proj/llake/last-ingest-sha")
+
+  # Get the short SHA of only the first new commit (commit-alpha, one before HEAD)
+  local SHA_ONE
+  SHA_ONE=$(git -C "$proj" rev-parse --short HEAD~1)
+
+  # Plan addresses only one of the two commits; commits_skipped is empty.
+  # The cross-check will find the other commit uncovered → applier exits nonzero.
+  local PLAN_INLINE
+  PLAN_INLINE="{\"version\":\"1\",\"skip_reason\":null,\"summary\":\"partial\",\"updates\":[],\"creates\":[],\"deletes\":[],\"bidirectional_links\":[],\"commits_addressed\":[{\"sha\":\"$SHA_ONE\",\"pages\":[]}],\"commits_skipped\":[],\"log_entry\":{\"operation\":\"ingest\",\"commit_range\":\"r\",\"summary\":\"partial\",\"pages_affected\":[]}}"
+
+  PATH="$STUB_BIN:$PATH" \
+    LLAKE_STUB_MODE=ingest-v2-planner \
+    LLAKE_STUB_PLAN_INLINE="$PLAN_INLINE" \
+    LLAKE_POST_MERGE_SYNC=1 \
+    bash "$REPO_ROOT/hooks/post-merge.sh" || true
+
+  # Cursor must NOT have advanced (cross-check failure holds the cursor)
+  local sha_now; sha_now=$(cat "$proj/llake/last-ingest-sha")
+  assert_eq "coverage_fail_cursor_held" "$INITIAL_SHA" "$sha_now"
+
+  # Sanity: current SHA was not written either
+  if [ "$sha_now" = "$CURRENT_SHA" ]; then
+    FAIL=$((FAIL+1)); FAILED_NAMES+=("coverage_fail_cursor_not_at_head")
+    echo "  FAIL [coverage_fail_cursor_not_at_head]: cursor advanced to HEAD unexpectedly"
+  else
+    PASS=$((PASS+1))
+  fi
+
+  cd "$REPO_ROOT"
+}
+
 test_v2_clean_run
 test_legacy_regression
 test_v2_schema_invalid_holds_cursor
@@ -347,6 +392,7 @@ test_v2_fixer_clears_failure
 test_v2_fixer_failure_first_pass_stands
 test_stage1_failure_holds_cursor
 test_empty_plan_file_holds_cursor
+test_v2_coverage_fail_holds_cursor
 
 echo "PASS=$PASS FAIL=$FAIL"
 if [ "$FAIL" -gt 0 ]; then

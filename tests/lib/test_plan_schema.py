@@ -27,6 +27,8 @@ MINIMAL_VALID_PLAN = {
     "creates": [],
     "deletes": [],
     "bidirectional_links": [],
+    "commits_addressed": [],
+    "commits_skipped": [],
     "log_entry": {
         "operation": "ingest",
         "commit_range": "abc1234..def5678",
@@ -180,3 +182,94 @@ def test_log_entry_missing_operation_rejected(tmp_path):
     rc, _, err = run_validator(p)
     assert rc != 0
     assert "log_entry.operation" in err
+
+
+SHA_RE_STR = "[0-9a-f]{7,40}"
+
+
+def test_missing_commits_addressed_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    del plan["commits_addressed"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "commits_addressed" in err
+
+
+def test_missing_commits_skipped_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    del plan["commits_skipped"]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "commits_skipped" in err
+
+
+def test_commits_addressed_entry_requires_sha_and_pages(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["commits_addressed"] = [{"sha": "abc1234"}]  # missing 'pages'
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "pages" in err
+
+
+def test_commits_skipped_entry_requires_sha_and_reason(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["commits_skipped"] = [{"sha": "abc1234"}]  # missing 'reason'
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "reason" in err
+
+
+def test_commits_addressed_pages_must_be_known_slugs(tmp_path):
+    """Slug in commits_addressed[].pages[] must appear in updates/creates/deletes."""
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["updates"] = [{"slug": "real-page", "rationale": "r",
+                        "ops": [{"op": "body_replace", "content": "x"}]}]
+    plan["log_entry"]["pages_affected"] = ["real-page"]
+    plan["commits_addressed"] = [
+        {"sha": "abc1234", "pages": ["nonexistent-slug"]}
+    ]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "nonexistent-slug" in err
+
+
+def test_commits_addressed_and_skipped_overlap_rejected(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["commits_addressed"] = [{"sha": "abc1234", "pages": []}]
+    plan["commits_skipped"] = [{"sha": "abc1234", "reason": "trivial"}]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "abc1234" in err
+    assert "both" in err.lower() or "overlap" in err.lower()
+
+
+def test_commits_addressed_sha_format_validated(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["commits_addressed"] = [{"sha": "Not-A-Sha", "pages": []}]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc != 0
+    assert "sha" in err.lower()
+
+
+def test_valid_commits_addressed_and_skipped_passes(tmp_path):
+    plan = json.loads(json.dumps(MINIMAL_VALID_PLAN))
+    plan["updates"] = [{"slug": "real-page", "rationale": "r",
+                        "ops": [{"op": "body_replace", "content": "x"}]}]
+    plan["log_entry"]["pages_affected"] = ["real-page"]
+    plan["commits_addressed"] = [
+        {"sha": "abc1234", "pages": ["real-page"]},
+        {"sha": "def5678def5678def5678def5678def5678def56", "pages": []},
+    ]
+    plan["commits_skipped"] = [
+        {"sha": "1111111", "reason": "Pure rename, no semantic change"}
+    ]
+    p = write_plan(tmp_path, plan)
+    rc, _, err = run_validator(p)
+    assert rc == 0, f"unexpected stderr: {err}"

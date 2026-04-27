@@ -10,6 +10,7 @@ Pure stdlib. Exits nonzero on git/IO error.
 """
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -50,6 +51,28 @@ def commit_metadata(repo, sha, include):
         parts = ln.split("\t")
         status, path = parts[0], parts[-1]
         files.append({"path": path, "status": status[0]})
+
+    # Per-file numstat — added / removed line counts. `git show --numstat`
+    # emits "<added>\t<removed>\t<path>" per file. Binary files emit "-\t-\t<path>";
+    # we treat those as 0/0.
+    numstat_out = git(repo, "show", "--numstat", "--format=", sha, "--", *include)
+    by_path_lines = {}
+    for ln in numstat_out.splitlines():
+        if not ln.strip():
+            continue
+        parts = ln.split("\t")
+        if len(parts) < 3:
+            continue
+        added_s, removed_s, path = parts[0], parts[1], parts[-1]
+        added = int(added_s) if added_s.isdigit() else 0
+        removed = int(removed_s) if removed_s.isdigit() else 0
+        by_path_lines[path] = (added, removed)
+
+    for entry in files:
+        added, removed = by_path_lines.get(entry["path"], (0, 0))
+        entry["added"] = added
+        entry["removed"] = removed
+
     return {
         "sha": full_sha, "short": short, "author": author, "date": date,
         "subject": subject, "body": body, "files": files,
@@ -168,6 +191,174 @@ def write_per_file_diffs(repo, files, last, current, out_dir, chunk_bytes):
             json.dumps({"file": path, "chunks": names}, indent=2))
 
 
+def churn_score(stats):
+    """Composite churn score for a single file.
+
+    Weights commits-touching heavily — a file in 5 separate commits is
+    almost certainly evolving. Line counts are log-dampened so a single
+    monster patch doesn't dominate.
+
+    Args:
+        stats: dict with at least 'commits' (int), 'added' (int), 'removed' (int).
+    Returns:
+        float score; larger means higher priority for forced reading.
+    """
+    commits = stats.get("commits", 0)
+    added = stats.get("added", 0)
+    removed = stats.get("removed", 0)
+    return commits * 10 + math.log1p(added + removed)
+
+
+def compute_file_churn(commits):
+    """Aggregate per-commit file lists into per-file churn stats.
+
+    Args:
+        commits: list of dicts as produced by commit_metadata, each with a
+            'files' list. Each file may carry 'added' / 'removed' line counts
+            (added by Task 5); missing keys default to 0.
+    Returns:
+        list of dicts: [{"path", "commits", "added", "removed", "score"}, ...]
+        sorted by score descending.
+    """
+    by_path = {}
+    for c in commits:
+        for f in c.get("files", []):
+            path = f["path"]
+            entry = by_path.setdefault(path, {
+                "path": path,
+                "commits": 0,
+                "added": 0,
+                "removed": 0,
+            })
+            entry["commits"] += 1
+            entry["added"] += f.get("added", 0)
+            entry["removed"] += f.get("removed", 0)
+    for entry in by_path.values():
+        entry["score"] = churn_score(entry)
+    return sorted(by_path.values(), key=lambda e: -e["score"])
+
+
+def select_must_read(churn, range_commit_count, get_bytes,
+                     pareto_target, max_bytes, max_bytes_per_file,
+                     multi_touch_floor, max_files_override=0):
+    """Select the high-priority files whose patches must be inlined into the prompt.
+
+    Algorithm:
+      - Compute dynamic max_files = max(5, range_commit_count // 4) unless
+        max_files_override > 0.
+      - Walk churn in score-descending order. For each file:
+          forced  = stats.commits >= multi_touch_floor
+          - non-forced files: stop if len(must) >= max_files OR cumulative
+            score / total >= pareto_target.
+          - byte cap (max_bytes) applies to all files; non-forced files break
+            on cap, forced files continue (smaller forced files may still fit).
+          - per-file truncation cap (max_bytes_per_file) is applied at the
+            inline stage, not here; we use min(get_bytes(path), max_bytes_per_file)
+            for budget accounting so a monster file doesn't blow the budget.
+
+    Args:
+        churn: list of dicts as produced by compute_file_churn (sorted by score desc).
+        range_commit_count: how many commits in the input range; used for dynamic max_files.
+        get_bytes: callable(path) -> int, bytes-on-disk for the file's patch.
+        pareto_target: float in (0, 1]; stop adding non-forced files when cumulative
+            score reaches this fraction of total.
+        max_bytes: total byte budget for inlined patches.
+        max_bytes_per_file: per-file truncation cap (used here for budget accounting).
+        multi_touch_floor: stats.commits >= this forces inclusion past Pareto/file caps.
+        max_files_override: if > 0, use this as max_files; otherwise compute dynamically.
+
+    Returns:
+        list of dicts (subset of churn) augmented with "priority": "must".
+    """
+    if not churn:
+        return []
+
+    if max_files_override > 0:
+        max_files = max_files_override
+    else:
+        max_files = max(5, range_commit_count // 4)
+
+    total_score = sum(c["score"] for c in churn) or 1.0
+
+    must = []
+    cumulative_score = 0.0
+    bytes_inlined = 0
+
+    for entry in churn:
+        forced = entry["commits"] >= multi_touch_floor
+
+        if not forced:
+            if len(must) >= max_files:
+                break
+            if cumulative_score / total_score >= pareto_target:
+                break
+
+        patch_size = min(get_bytes(entry["path"]), max_bytes_per_file)
+        if bytes_inlined + patch_size > max_bytes:
+            if forced:
+                continue  # try smaller forced files
+            else:
+                break
+
+        out = dict(entry)
+        out["priority"] = "must"
+        must.append(out)
+        cumulative_score += entry["score"]
+        bytes_inlined += patch_size
+
+    return must
+
+
+def build_must_read_patches(must_read, diffs_dir, max_bytes_per_file):
+    """Concatenate the patches for must-read files into a single string with
+    headers. Truncates each per-file payload at max_bytes_per_file with a
+    visible marker.
+
+    Args:
+        must_read: list of dicts as returned by select_must_read.
+        diffs_dir: Path; the per-file diff directory written by write_per_file_diffs.
+        max_bytes_per_file: int; per-file payload cap in bytes.
+    Returns:
+        str — the concatenated body. Empty string if must_read is empty.
+    """
+    if not must_read:
+        return ""
+    parts = [
+        "=== HIGH-CHURN FILES (auto-attached for required coverage) ===",
+        "",
+        "These files changed substantially in this range. Their patches are",
+        "inlined below; you do not need to Glob/Read them. Your plan MUST",
+        "address every commit that touches them in commits_addressed[].",
+        "",
+    ]
+    for f in must_read:
+        path = f["path"]
+        safe = _safe_name(path)
+        # Single patch first; chunked patch as fallback (.001, .002, ... + .index.json)
+        single = diffs_dir / f"{safe}.patch"
+        chunks_index = diffs_dir / f"{safe}.index.json"
+        if single.exists():
+            payload = single.read_text()
+        elif chunks_index.exists():
+            idx = json.loads(chunks_index.read_text())
+            payload = "".join((diffs_dir / name).read_text() for name in idx["chunks"])
+        else:
+            payload = "(no diff captured for this file)\n"
+        truncated = False
+        if len(payload.encode()) > max_bytes_per_file:
+            payload = payload.encode()[:max_bytes_per_file].decode("utf-8", errors="ignore")
+            truncated = True
+        header = (f"--- {path} — {f['commits']} commits, "
+                  f"+{f['added']}/-{f['removed']}, score={f['score']:.1f} ---")
+        parts.append(header)
+        parts.append(payload.rstrip())
+        if truncated:
+            parts.append(f"[... patch truncated at {max_bytes_per_file} bytes; "
+                         f"full diff in context/diffs/{safe}.patch]")
+        parts.append("")
+    return "\n".join(parts)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--project-root", required=True)
@@ -177,6 +368,16 @@ def main():
     ap.add_argument("--include", action="append", default=[])
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--diff-chunk-bytes", type=int, default=2000)
+    ap.add_argument("--churn-pareto-target", type=float, default=0.80,
+                    help="Stop adding non-forced files when cumulative score reaches this fraction of total")
+    ap.add_argument("--churn-max-files", type=int, default=0,
+                    help="Hard cap on must-read files (0 → dynamic max(5, commits//4))")
+    ap.add_argument("--churn-max-bytes", type=int, default=150000,
+                    help="Total byte budget for inlined patches (0 → no must-read patches)")
+    ap.add_argument("--churn-max-bytes-per-file", type=int, default=30000,
+                    help="Per-file truncation cap for inlined patches")
+    ap.add_argument("--churn-multi-touch-floor", type=int, default=3,
+                    help="A file in this many commits is forced past Pareto/file caps")
     args = ap.parse_args()
 
     repo = Path(args.project_root)
@@ -198,6 +399,53 @@ def main():
 
     write_per_file_diffs(repo, files_touched, args.last_sha, args.current_sha,
                          out_dir, args.diff_chunk_bytes)
+
+    # File-churn ranking + must-read selection
+    churn_ranked = compute_file_churn(commits)
+
+    diffs_dir = out_dir / "diffs"
+
+    def _patch_bytes(path):
+        safe = _safe_name(path)
+        single = diffs_dir / f"{safe}.patch"
+        chunks_index = diffs_dir / f"{safe}.index.json"
+        if single.exists():
+            return single.stat().st_size
+        if chunks_index.exists():
+            idx = json.loads(chunks_index.read_text())
+            return sum((diffs_dir / name).stat().st_size for name in idx["chunks"])
+        return 0
+
+    must_read = select_must_read(
+        churn_ranked,
+        range_commit_count=len(commits),
+        get_bytes=_patch_bytes,
+        pareto_target=args.churn_pareto_target,
+        max_bytes=args.churn_max_bytes,
+        max_bytes_per_file=args.churn_max_bytes_per_file,
+        multi_touch_floor=args.churn_multi_touch_floor,
+        max_files_override=args.churn_max_files,
+    )
+
+    must_read_paths = {f["path"] for f in must_read}
+    files_out = []
+    for entry in churn_ranked:
+        copy = dict(entry)
+        copy["priority"] = "must" if entry["path"] in must_read_paths else "should"
+        files_out.append(copy)
+
+    (out_dir / "file_churn.json").write_text(json.dumps({
+        "files": files_out,
+        "summary": {
+            "total_files": len(files_out),
+            "must_count": len(must_read),
+            "total_score": sum(f["score"] for f in files_out),
+        },
+    }, indent=2))
+
+    patches_body = build_must_read_patches(must_read, diffs_dir, args.churn_max_bytes_per_file)
+    (out_dir / "must-read-patches.txt").write_text(patches_body)
+
     write_wiki_index(args.wiki_root, out_dir)
 
 
