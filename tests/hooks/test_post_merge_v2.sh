@@ -129,7 +129,7 @@ json.dump(c, open(p, 'w'), indent=2)
   PATH="$STUB_BIN:$PATH" \
     LLAKE_STUB_MODE=ingest-v2-planner \
     LLAKE_STUB_SLEEP_SECONDS=5 \
-    LLAKE_STUB_PLAN_INLINE='{"version":"1","skip_reason":null,"summary":"x","updates":[],"creates":[],"deletes":[],"bidirectional_links":[],"log_entry":{"operation":"ingest","commit_range":"r","summary":"t","pages_affected":[]}}' \
+    LLAKE_STUB_PLAN_INLINE='{"version":"1","skip_reason":null,"summary":"x","updates":[],"creates":[],"deletes":[],"bidirectional_links":[],"commits_addressed":[],"commits_skipped":[],"log_entry":{"operation":"ingest","commit_range":"r","summary":"t","pages_affected":[]}}' \
     LLAKE_POST_MERGE_SYNC=1 \
     bash "$REPO_ROOT/hooks/post-merge.sh" || true
   local sha_now; sha_now=$(cat "$proj/llake/last-ingest-sha")
