@@ -175,31 +175,3 @@ def test_fallback_path_not_found_reports_diagnostic(tmp_path):
     assert rc != 0
     assert "EXAMPLES" in err
     assert "fallback read failed" in err
-
-
-def test_ingest_v2_template_resolves_high_churn_patches_placeholder():
-    """The strict renderer must accept HIGH_CHURN_PATCHES as a slot."""
-    templates_dir = REPO_ROOT / "templates"
-    template = REPO_ROOT / "hooks" / "prompts" / "ingest.v2.md.tmpl"
-    config = templates_dir / "config.default.json"
-
-    result = subprocess.run(
-        [
-            "python3", str(SCRIPT),
-            "--templates-dir", str(templates_dir),
-            str(template),
-            str(config),
-            "AGENT_ID=test-agent",
-            "PROJECT_ROOT=/tmp/proj",
-            "LLAKE_ROOT=/tmp/proj/llake",
-            "WIKI_ROOT=/tmp/proj/llake/wiki",
-            "COMMIT_RANGE=abc..def",
-            "CONTEXT_DIR=/tmp/agent/context",
-            "HIGH_CHURN_PATCHES=== inlined diffs ===",
-        ],
-        capture_output=True, text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "inlined diffs" in result.stdout
-    # Placeholder must be fully resolved — strict renderer leaves no {{...}} behind.
-    assert "{{HIGH_CHURN_PATCHES}}" not in result.stdout

@@ -32,17 +32,6 @@ It contains:
 You may also Read existing wiki pages under {{WIKI_ROOT}}/ when you need their
 current content to compose surgical edits.
 
-## High-churn files (auto-attached)
-
-The pre-processor identifies the files with the most churn in this range and
-attaches their full diffs below. You receive these in context whether or not
-you would have chosen to Read them — they remain authoritative even if the
-list in `file_churn.json` differs slightly. Treat the inlined block as
-required reading; every commit that touches a file listed here must appear
-in `commits_addressed[]`.
-
-{{HIGH_CHURN_PATCHES}}
-
 ## Your tools
 
 You have: `Read`, `Glob`, `Grep`. You do NOT have Write, Edit, or Bash. You
@@ -104,34 +93,16 @@ proposing forbidden ops wastes tokens.
 Must equal the union of slugs in updates[], creates[], and deletes[]. The
 schema validator computes this and rejects mismatches.
 
-### R8 — Per-commit accountability
-
-Your plan must account for every commit in `{{COMMIT_RANGE}}`. Two new top-level keys are required:
-
-- `commits_addressed[]` — for each commit whose impact is captured by your plan, list `{"sha": "<short-sha>", "pages": ["<slug>", ...]}`. Each slug must appear in `updates[]`, `creates[]`, or `deletes[]`. `pages` may be `[]` for a commit whose impact is captured indirectly (e.g., already mentioned on a page you didn't choose to edit), but prefer naming the page when you can — it makes the trace reviewable.
-- `commits_skipped[]` — for each commit you chose NOT to address, list `{"sha": "<short-sha>", "reason": "<short justification>"}`. The reason must be specific (e.g., "Pure file rename, no semantic change to document"; not "trivial").
-
-The applier validates that `commits_addressed ∪ commits_skipped` equals the commit set in `{{CONTEXT_DIR}}/changes.json`. If a commit is missing from both, the plan is rejected and `last-ingest-sha` is held — your run is wasted.
-
-Use the SHAs from `changes.json` (the `short` field). Mixing full and short SHAs is fine; the applier prefix-matches.
-
-This is not a busywork field. It is the place where you account for the lady/doctor/bootstrap-style refactors that don't reach into the headline structural change. If you find yourself wanting to skip a hardening commit because the v2 pipeline is more interesting — that's the moment R8 catches.
-
 ## Workflow
 
 1. Read `{{CONTEXT_DIR}}/changes.json` to see what changed.
 2. Read `{{CONTEXT_DIR}}/wiki-index.json` to see what pages exist.
-3. The high-churn diffs are already inlined in the prompt above; do not
-   re-Read them. For commits that touch only lower-priority files, Glob
-   `{{CONTEXT_DIR}}/diffs/*.patch` and Read selectively if you need them
-   to compose accurate ops.
+3. Read the relevant diffs (per-file, focused). Use `Glob {{CONTEXT_DIR}}/diffs/*.patch`
+   to enumerate; Read the ones that touch areas you plan to update.
 4. Read existing wiki pages you intend to update — Read them in a single
    parallel turn (multiple `Read` tool calls in one message) to keep cache
    creates bounded.
-5. Compose the plan.
-   - Walk `changes.json` commits one by one. For each, decide: which page slugs in your plan capture its impact? Add an entry to `commits_addressed[]`. If none, add to `commits_skipped[]` with a specific reason.
-   - Verify `commits_addressed ∪ commits_skipped` covers every SHA in changes.json before emitting.
-6. Emit the plan as your final response, beginning with `{` — no prose preamble, no Markdown fences.
+5. Compose the plan. Emit it as your final response.
 
 ## Skip path
 
@@ -142,12 +113,8 @@ implication), emit a plan with `skip_reason` set:
     {"version": "1", "skip_reason": "only test fixture whitespace changed",
      "summary": "n/a", "updates": [], "creates": [], "deletes": [],
      "bidirectional_links": [],
-     "commits_addressed": [], "commits_skipped": [],
      "log_entry": {"operation": "ingest", "commit_range": "{{COMMIT_RANGE}}",
                     "summary": "n/a", "pages_affected": []}}
-
-On a skip plan, leave `commits_addressed` and `commits_skipped` empty — the
-applier bypasses the per-commit cross-check when `skip_reason` is set.
 
 Do not skip merely because the change is small — small fixes often produce
 the most valuable gotchas pages. Skip only when no reader of the wiki
