@@ -142,8 +142,12 @@ implication), emit a plan with `skip_reason` set:
     {"version": "1", "skip_reason": "only test fixture whitespace changed",
      "summary": "n/a", "updates": [], "creates": [], "deletes": [],
      "bidirectional_links": [],
+     "commits_addressed": [], "commits_skipped": [],
      "log_entry": {"operation": "ingest", "commit_range": "{{COMMIT_RANGE}}",
                     "summary": "n/a", "pages_affected": []}}
+
+On a skip plan, leave `commits_addressed` and `commits_skipped` empty — the
+applier bypasses the per-commit cross-check when `skip_reason` is set.
 
 Do not skip merely because the change is small — small fixes often produce
 the most valuable gotchas pages. Skip only when no reader of the wiki

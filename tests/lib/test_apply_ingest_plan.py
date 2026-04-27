@@ -1062,3 +1062,42 @@ def test_applier_accepts_full_coverage(tmp_path):
         _run_applier(plan_path, wiki_root, llake_root, applied, failed,
                      changes_json=changes_path))
     assert rc == 0, err
+
+
+def test_applier_skip_plan_bypasses_changes_json_check(tmp_path):
+    """Skip plan with empty commits_addressed/skipped + --changes-json must succeed."""
+    llake_root, wiki_root = _make_minimal_llake(tmp_path)
+    changes = {
+        "range": "abc1234..def5678",
+        "commits": [
+            {"sha": "abc1234abc1234abc1234abc1234abc1234abc1", "short": "abc1234",
+             "files": []},
+            {"sha": "def5678def5678def5678def5678def5678def5", "short": "def5678",
+             "files": []},
+        ],
+        "files_touched": [],
+    }
+    changes_path = tmp_path / "changes.json"
+    changes_path.write_text(_json.dumps(changes))
+
+    plan = {
+        "version": "1",
+        "skip_reason": "only fixture whitespace changed",
+        "summary": "n/a",
+        "updates": [], "creates": [], "deletes": [], "bidirectional_links": [],
+        "commits_addressed": [],
+        "commits_skipped": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc1234..def5678",
+                      "summary": "n/a", "pages_affected": []},
+    }
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(_json.dumps(plan))
+
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    rc, _, err = (lambda r: (r.returncode, r.stdout, r.stderr))(
+        _run_applier(plan_path, wiki_root, llake_root, applied, failed,
+                     changes_json=changes_path))
+    assert rc == 0, f"skip plan should succeed, got rc={rc}, err={err}"
+    # log.md should record the skip
+    log_text = (llake_root / "log.md").read_text()
+    assert "skipped" in log_text.lower() or "fixture whitespace" in log_text

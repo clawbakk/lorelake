@@ -573,6 +573,20 @@ def main():
             print(e, file=sys.stderr)
         sys.exit(1)
 
+    # Skip-reason early return must come BEFORE the --changes-json cross-check.
+    # A skip plan has empty commits_addressed/skipped (by spec) — the cross-check
+    # would incorrectly flag every commit in the range as uncovered. Schema
+    # validation still runs above, so commits_addressed/commits_skipped must still
+    # be present (as empty arrays) to pass schema; but the cross-check is bypassed.
+    if plan.get("skip_reason"):
+        Path(args.applied_out).write_text(json.dumps(
+            {"updates": [], "creates": [], "deletes": [], "bidirectional_links": []}))
+        Path(args.failed_out).write_text("[]")
+        if not args.no_log_entry:
+            _append_log_entry(llake_root, args.today, plan["log_entry"],
+                              has_failures=False, skip_reason=plan["skip_reason"])
+        return 0
+
     # Per-commit accountability (intervention B). Skipped on the fixer pass
     # because that plan only covers the failed-update slice, not the whole range.
     if args.changes_json:
@@ -646,15 +660,6 @@ def main():
         for e in ref_errors:
             print(e, file=sys.stderr)
         sys.exit(1)
-
-    if plan.get("skip_reason"):
-        Path(args.applied_out).write_text(json.dumps(
-            {"updates": [], "creates": [], "deletes": [], "bidirectional_links": []}))
-        Path(args.failed_out).write_text("[]")
-        if not args.no_log_entry:
-            _append_log_entry(llake_root, args.today, plan["log_entry"],
-                              has_failures=False, skip_reason=plan["skip_reason"])
-        return 0
 
     applied = {"updates": [], "creates": [], "deletes": [], "bidirectional_links": []}
     failed = []
