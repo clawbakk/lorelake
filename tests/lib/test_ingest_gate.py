@@ -108,3 +108,160 @@ def test_git_failure_raises(repo):
     r, _ = repo
     with pytest.raises(RuntimeError):
         ingest_gate.git_numstat(r, "deadbeef", "HEAD", ("src/",))
+
+
+import os
+import time
+
+SCRIPT = REPO_ROOT / "hooks" / "lib" / "ingest_gate.py"
+
+
+def run_gate(repo_path, last, current, state_dir,
+             include=("src/",), schedule_enabled="true",
+             min_lines=1500, max_age_hours=24, env=None):
+    args = [sys.executable, str(SCRIPT),
+            "--project-root", str(repo_path),
+            "--last-sha", last,
+            "--current-sha", current,
+            "--state-dir", str(state_dir),
+            "--schedule-enabled", schedule_enabled,
+            "--min-changed-lines", str(min_lines),
+            "--max-age-hours", str(max_age_hours)]
+    for p in include:
+        args += ["--include", p]
+    res = subprocess.run(args, capture_output=True, text=True,
+                         env={**os.environ, **(env or {})})
+    return res.returncode, res.stdout.strip(), res.stderr.strip()
+
+
+@pytest.fixture
+def state_dir(tmp_path):
+    d = tmp_path / "state"
+    d.mkdir()
+    return d
+
+
+def seed_timestamp(state_dir, seconds_ago=0):
+    (state_dir / "last-ingest-at").write_text(str(int(time.time()) - seconds_ago))
+
+
+def verdict(out):
+    return out.split(" ", 1)[0]
+
+
+def test_empty_pile_verdict(repo, state_dir):
+    r, base = repo
+    seed_timestamp(state_dir)
+    head = commit(r, "README.md", "# docs\n")
+    rc, out, _ = run_gate(r, base, head, state_dir)
+    assert rc == 0
+    assert verdict(out) == "EMPTY"
+
+
+def test_small_pile_waits(repo, state_dir):
+    r, base = repo
+    seed_timestamp(state_dir)
+    head = commit(r, "src/a.txt", "line1\nline2\n")
+    rc, out, _ = run_gate(r, base, head, state_dir, min_lines=1000)
+    assert rc == 0
+    assert verdict(out) == "WAIT"
+    assert "need_lines=1000" in out
+    assert "need_age_h=24" in out
+
+
+def test_lines_arm_trips(repo, state_dir):
+    r, base = repo
+    seed_timestamp(state_dir)
+    head = commit(r, "src/a.txt", "line1\nline2\nline3\n")
+    rc, out, _ = run_gate(r, base, head, state_dir, min_lines=2)
+    assert rc == 0
+    assert verdict(out) == "RUN"
+    assert "reason=lines" in out
+
+
+def test_age_arm_trips(repo, state_dir):
+    r, base = repo
+    seed_timestamp(state_dir, seconds_ago=60 * 60 * 30)  # 30h ago
+    head = commit(r, "src/a.txt", "line1\nline2\n")
+    rc, out, _ = run_gate(r, base, head, state_dir, min_lines=100000)
+    assert rc == 0
+    assert verdict(out) == "RUN"
+    assert "reason=age" in out
+
+
+def test_missing_timestamp_runs(repo, state_dir):
+    r, base = repo
+    head = commit(r, "src/a.txt", "line1\nline2\n")
+    rc, out, _ = run_gate(r, base, head, state_dir, min_lines=100000)
+    assert rc == 0
+    assert verdict(out) == "RUN"
+    assert "reason=no-timestamp" in out
+
+
+def test_unparseable_timestamp_runs(repo, state_dir):
+    r, base = repo
+    (state_dir / "last-ingest-at").write_text("not-a-number")
+    head = commit(r, "src/a.txt", "line1\nline2\n")
+    rc, out, _ = run_gate(r, base, head, state_dir, min_lines=100000)
+    assert rc == 0
+    assert verdict(out) == "RUN"
+    assert "reason=no-timestamp" in out
+
+
+def test_schedule_disabled_runs_on_nonempty_pile(repo, state_dir):
+    r, base = repo
+    seed_timestamp(state_dir)
+    head = commit(r, "src/a.txt", "line1\nline2\n")
+    rc, out, _ = run_gate(r, base, head, state_dir,
+                          schedule_enabled="false", min_lines=100000)
+    assert rc == 0
+    assert verdict(out) == "RUN"
+    assert "reason=schedule-disabled" in out
+
+
+def test_schedule_disabled_still_skips_empty_pile(repo, state_dir):
+    """Turning off batching must not re-introduce runs over zero relevant input."""
+    r, base = repo
+    seed_timestamp(state_dir)
+    head = commit(r, "README.md", "# docs\n")
+    rc, out, _ = run_gate(r, base, head, state_dir, schedule_enabled="false")
+    assert rc == 0
+    assert verdict(out) == "EMPTY"
+
+
+def test_env_override_forces_run(repo, state_dir):
+    r, base = repo
+    seed_timestamp(state_dir)
+    head = commit(r, "src/a.txt", "line1\nline2\n")
+    rc, out, _ = run_gate(r, base, head, state_dir, min_lines=100000,
+                          env={"LLAKE_IGNORE_SCHEDULE": "1"})
+    assert rc == 0
+    assert verdict(out) == "RUN"
+    assert "reason=forced" in out
+
+
+def test_env_override_still_skips_empty_pile(repo, state_dir):
+    r, base = repo
+    seed_timestamp(state_dir)
+    head = commit(r, "README.md", "# docs\n")
+    rc, out, _ = run_gate(r, base, head, state_dir,
+                          env={"LLAKE_IGNORE_SCHEDULE": "1"})
+    assert rc == 0
+    assert verdict(out) == "EMPTY"
+
+
+def test_bad_sha_exits_nonzero_for_fail_open(repo, state_dir):
+    r, _ = repo
+    rc, out, err = run_gate(r, "deadbeef", "HEAD", state_dir)
+    assert rc != 0
+    assert err != ""
+    assert out == ""
+
+
+def test_verdict_line_is_a_single_line(repo, state_dir):
+    r, base = repo
+    seed_timestamp(state_dir)
+    head = commit(r, "src/a.txt", "line1\nline2\n")
+    _, out, _ = run_gate(r, base, head, state_dir, min_lines=1000)
+    assert len(out.splitlines()) == 1
+    assert " " in out  # verdict + detail, splittable on the first space
