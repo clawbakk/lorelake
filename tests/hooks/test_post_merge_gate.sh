@@ -213,6 +213,93 @@ test_missing_clock_seeds_and_defers() {
   rm -rf "$proj"
 }
 
+set_pipeline_v2() {
+  local proj="$1"
+  python3 - "$proj/llake/config.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    c = json.load(f)
+c.setdefault("ingest", {})["pipeline"] = "v2"
+c["ingest"].setdefault("v2", {
+    "plannerModel": "opus", "plannerEffort": "high", "plannerBudgetUsd": 5.0,
+    "plannerAllowedTools": ["Read", "Glob", "Grep"],
+    "fixerModel": "opus", "fixerEffort": "medium", "fixerBudgetUsd": 2.0,
+    "fixerAllowedTools": ["Read", "Glob", "Grep"],
+    "maxFixerRetries": 0, "diffChunkBytes": 2000, "timeoutSeconds": 30,
+})
+with open(path, "w") as f:
+    json.dump(c, f, indent=2)
+PY
+}
+
+# --- Test 9: v2 honors the empty-pile gate (previously it spawned regardless) ---
+test_v2_empty_pile_skips() {
+  local proj; proj=$(mkproject "main")
+  set_pipeline_v2 "$proj"
+  set_schedule "$proj" true 100000 24
+  seed_timestamp "$proj" 0
+  add_nonsrc_commit "$proj"
+  local head; head=$(cd "$proj" && git rev-parse HEAD)
+
+  run_post_merge "$proj" >/dev/null 2>&1
+
+  assert_log_grep "v2-empty:log" "$proj/llake/.state/hooks.log" "no relevant file changes"
+  assert_log_no_grep "v2-empty:no-spawn" "$proj/llake/.state/hooks.log" "spawned v2 agent"
+  assert_eq "v2-empty:cursor-advanced" "$head" "$(cat "$proj/llake/last-ingest-sha")"
+  rm -rf "$proj"
+}
+
+# --- Test 10: v2 defers below both arms and holds the cursor ---
+test_v2_defers() {
+  local proj; proj=$(mkproject "main")
+  set_pipeline_v2 "$proj"
+  set_schedule "$proj" true 100000 24
+  seed_timestamp "$proj" 0
+  add_src_commit "$proj"
+  local before; before=$(cat "$proj/llake/last-ingest-sha")
+
+  run_post_merge "$proj" >/dev/null 2>&1
+
+  assert_log_grep "v2-defer:log" "$proj/llake/.state/hooks.log" "deferred:"
+  assert_log_no_grep "v2-defer:no-spawn" "$proj/llake/.state/hooks.log" "spawned v2 agent"
+  assert_eq "v2-defer:cursor-held" "$before" "$(cat "$proj/llake/last-ingest-sha")"
+  rm -rf "$proj"
+}
+
+# --- Test 11: v2 success path writes BOTH the cursor and the clock ---
+# This is the test that covers THIS task's deliverable. Tests 9 and 10 exercise
+# skip/defer, which never reach v2's cursor write.
+test_v2_success_writes_clock() {
+  local proj; proj=$(mkproject "main")
+  set_pipeline_v2 "$proj"
+  set_schedule "$proj" true 1 24
+  seed_timestamp "$proj" 108000   # 30h ago — the run must overwrite this
+  add_src_commit "$proj" "tweak"
+  local head; head=$(cd "$proj" && git rev-parse HEAD)
+  local before_clock; before_clock=$(cat "$proj/llake/.state/last-ingest-at")
+  local plan
+  plan='{"version":"1","skip_reason":null,"summary":"trivial","updates":[],"creates":[],"deletes":[],"bidirectional_links":[],"log_entry":{"operation":"ingest","commit_range":"r","summary":"t","pages_affected":[]}}'
+
+  (
+    cd "$proj" || exit 1
+    PATH="$STUB_BIN:$PATH" \
+      LLAKE_STUB_MODE=ingest-v2-planner \
+      LLAKE_STUB_PLAN_INLINE="$plan" \
+      LLAKE_POST_MERGE_SYNC=1 \
+      bash "$REPO_ROOT/hooks/post-merge.sh"
+  ) >/dev/null 2>&1
+
+  assert_eq "v2-success:cursor" "$head" "$(cat "$proj/llake/last-ingest-sha")"
+  local after_clock; after_clock=$(cat "$proj/llake/.state/last-ingest-at")
+  if [ "$after_clock" -gt "$before_clock" ]; then
+    assert_eq "v2-success:clock-advanced" "advanced" "advanced"
+  else
+    assert_eq "v2-success:clock-advanced" "advanced" "stale (before=$before_clock after=$after_clock)"
+  fi
+  rm -rf "$proj"
+}
+
 test_below_thresholds_defers
 test_lines_arm_spawns
 test_age_arm_spawns
@@ -221,6 +308,9 @@ test_env_override_forces_spawn
 test_schedule_disabled_spawns
 test_schedule_disabled_still_skips_empty
 test_missing_clock_seeds_and_defers
+test_v2_empty_pile_skips
+test_v2_defers
+test_v2_success_writes_clock
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
