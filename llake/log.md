@@ -89,3 +89,9 @@ Pages affected: 32 total (see category indexes)
 Full audit across 47 pages in 9 categories. 8 diagnosis subagents dispatched in parallel. Quick checks clean on index sync and frontmatter. Fixed 1 factual contradiction (runtime-layout last-ingest-sha ownership), 1 terminology drift (bootstrap agent → skill in post-merge-hook), and 3 Standard 1 coherence issues (capture-template placeholder count, page-format monorepo marker list, extract-transcript Code References table). Deferred: 2 orphan playbook pages (navigable via index), 24 intentional documentation-example wikilinks, and 5 minor Standard 1 line-ref warnings.
 
 Pages affected: [[runtime-layout]], [[post-merge-hook]], [[capture-template]], [[page-format]], [[extract-transcript]]
+
+## [2026-09-16] session-capture | CLAUDE.md vs. session-preamble mechanism clarified
+
+Captured a session that clarified why no LoreLake skill edits CLAUDE.md (SessionStart injects context live instead) and identified a new gotcha: the session running /llake-bootstrap can't see the wiki it just created because session-start.sh snapshots index.md once, before bootstrap writes anything. Added a bootstrap-stale-context case to the debug-hook-failures playbook.
+
+Pages affected: [[2026-09-16-claude-md-vs-session-preamble]], [[session-preamble-snapshot-timing]], [[debug-hook-failures]]

@@ -3,7 +3,7 @@ title: "Debug Hook Failures"
 description: "How to investigate silent or failing LoreLake hooks via hooks.log and agent working dirs"
 tags: [playbook, debugging, hooks, agents]
 created: 2026-04-23
-updated: 2026-04-23
+updated: 2026-09-16
 status: current
 related:
   - "[[agent-run]]"
@@ -21,6 +21,7 @@ LoreLake hooks (`session-end` and `post-merge`) run silently in the background. 
 - A wiki page is not updated after a code merge.
 - A session discussion entry was expected but never appeared.
 - The hook appears to start but leaves no trace.
+- Right after `/llake-bootstrap` finishes, the assistant doesn't seem to know about the wiki it just created.
 
 ## Diagnosis
 
@@ -275,7 +276,13 @@ This means a `{{VAR}}` in a template has no matching `KEY=value` argument in the
 
 **Fix**: `unset IS_LLAKE_AGENT` in the affected shell. This variable is exported by hooks before spawning agents and should only exist in the agent subprocess environment.
 
-### 7. post-merge hook not wired
+### 7. Bootstrap session sees no wiki context (stale preamble)
+
+**Symptom**: `/llake-bootstrap` completes and `llake/index.md` is populated, but the same session shows no awareness of it. `hooks.log` has a normal `session-start ... context injected` line — nothing looks broken.
+
+**Fix**: This is expected, not a bug. `session-start.sh` snapshots `index.md` once, at `SessionStart` time — before bootstrap wrote anything. Start a new Claude Code session; its `SessionStart` will inject the now-populated catalog. See [[session-preamble-snapshot-timing]] for the full explanation. If a fresh session *still* shows no context, fall through to steps 1–2 above (check `hooks.log` for `skipped:` reasons, confirm `detect_project_root` finds `llake/config.json`).
+
+### 8. post-merge hook not wired
 
 **Symptom**: No `hooks.log` entry appears after `git pull`, even though there are new commits.
 
@@ -315,3 +322,4 @@ printf '#!/bin/bash\nexec "%s/hooks/post-merge.sh" "$@"\n' \
 - [[is-llake-agent-guard]] — recursion guard details
 - [[session-end-hook]] — full session-end hook reference
 - [[post-merge-hook]] — full post-merge hook reference
+- [[session-preamble-snapshot-timing]] — why a bootstrap session can't see the wiki it just built
