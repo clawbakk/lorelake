@@ -40,6 +40,8 @@ source "$LIB_DIR/agent-id.sh"
 source "$LIB_DIR/hook-log.sh"
 # shellcheck source=/dev/null
 source "$LIB_DIR/post-merge-lock.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/ingest-cursor.sh"
 
 # post-merge fires inside a git repo by definition.
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
@@ -157,12 +159,58 @@ fi
 # Verify the commit range is valid
 if ! git -C "$PROJECT_ROOT" log --oneline "$LAST_SHA..$CURRENT_SHA" > /dev/null 2>&1; then
   # If the range is invalid (e.g., force push), reset to current HEAD
-  echo "$CURRENT_SHA" > "$SHA_FILE"
+  advance_ingest_cursor "$CURRENT_SHA"
   hook_end "skipped: invalid range, reset SHA to $CURRENT_SHA" "$LOG_FILE"
   exit 0
 fi
 
 COMMIT_RANGE="${LAST_SHA:0:7}..${CURRENT_SHA:0:7}"
+
+# --- Batching gate ---
+# Runs before either pipeline spawns, so both share one decision:
+#   EMPTY → nothing under include paths: advance the cursor, skip the agent.
+#   WAIT  → pile too small and too young: HOLD the cursor, skip the agent.
+#           The next merge sees the wider range — the cursor is the queue.
+#   RUN   → proceed.
+# Fail-open: a gate error must never silently stop ingest forever.
+#
+# Seed the clock first. `.state/` is gitignored, so a fresh clone has no
+# timestamp; without this the gate would read "overdue" and force a full
+# ingest on the first merge in every clone.
+ensure_ingest_clock
+
+SCHEDULE_ENABLED=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.schedule.enabled")
+MIN_CHANGED_LINES=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.schedule.minChangedLines")
+MAX_AGE_HOURS=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.schedule.maxAgeHours")
+
+GATE_INCLUDE_ARGS=()
+for p in "${INCLUDE_PATHS[@]}"; do
+  GATE_INCLUDE_ARGS+=(--include "$p")
+done
+
+GATE_OUT=$(python3 "$LIB_DIR/ingest_gate.py" \
+  --project-root "$PROJECT_ROOT" \
+  --last-sha "$LAST_SHA" \
+  --current-sha "$CURRENT_SHA" \
+  --state-dir "$STATE_DIR" \
+  --schedule-enabled "$SCHEDULE_ENABLED" \
+  --min-changed-lines "$MIN_CHANGED_LINES" \
+  --max-age-hours "$MAX_AGE_HOURS" \
+  "${GATE_INCLUDE_ARGS[@]}" 2>>"$LOG_FILE") || GATE_OUT="RUN reason=gate-error"
+
+GATE_VERDICT="${GATE_OUT%% *}"
+GATE_DETAIL="${GATE_OUT#* }"
+
+if [ "$GATE_VERDICT" = "EMPTY" ]; then
+  advance_ingest_cursor "$CURRENT_SHA"
+  hook_end "skipped: no relevant file changes ($COMMIT_RANGE)" "$LOG_FILE"
+  exit 0
+fi
+
+if [ "$GATE_VERDICT" = "WAIT" ]; then
+  hook_end "deferred: $GATE_DETAIL ($COMMIT_RANGE)" "$LOG_FILE"
+  exit 0
+fi
 
 # v2 branch: hand off to the v2 orchestrator before legacy setup runs.
 # v2 owns its own agent ID, dirs, watchdog, prompt rendering, and finalize —
@@ -208,7 +256,7 @@ if [ "$USE_INGEST_V2" = "1" ]; then
   else
     disown "$BG_PID"
   fi
-  hook_end "done: spawned v2 agent (range: $COMMIT_RANGE, timeout: ${V2_TIMEOUT}s)" "$LOG_FILE"
+  hook_end "done: spawned v2 agent (range: $COMMIT_RANGE, timeout: ${V2_TIMEOUT}s, gate: $GATE_DETAIL)" "$LOG_FILE"
   exit 0
 fi
 
@@ -227,20 +275,6 @@ if [ ${#INCLUDE_PATHS[@]} -gt 0 ]; then
   PATHSPEC_INCLUDE="-- $(printf "'%s' " "${INCLUDE_PATHS[@]}")"
 else
   PATHSPEC_INCLUDE=""
-fi
-
-# Pre-flight: skip agent if no changes touch included paths
-if [ ${#INCLUDE_PATHS[@]} -gt 0 ]; then
-  RELEVANT_FILES=$(git -C "$PROJECT_ROOT" diff --name-only "$LAST_SHA".."$CURRENT_SHA" -- "${INCLUDE_PATHS[@]}" 2>/dev/null | head -1)
-else
-  # No include filter — check all files
-  RELEVANT_FILES=$(git -C "$PROJECT_ROOT" diff --name-only "$LAST_SHA".."$CURRENT_SHA" 2>/dev/null | head -1)
-fi
-
-if [ -z "$RELEVANT_FILES" ]; then
-  echo "$CURRENT_SHA" > "$SHA_FILE"
-  hook_end "skipped: no relevant file changes ($COMMIT_RANGE)" "$LOG_FILE"
-  exit 0
 fi
 
 # Log agent launch metadata
@@ -358,7 +392,7 @@ rm -f "$RENDER_STDERR_FILE"
     printf "%s | %-13s | failed: formatter crashed (exit %s, agent exit %s, commits: %s) — cursor held; see agent.log\n" \
       "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$FORMATTER_EXIT" "$EXIT_CODE" "$COMMIT_RANGE" >> "$LOG_FILE"
   elif [ "$EXIT_CODE" -eq 0 ]; then
-    echo "$CURRENT_SHA" > "$SHA_FILE"
+    advance_ingest_cursor "$CURRENT_SHA"
     echo "=== COMPLETED: exit 0 at $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$AGENT_LOG"
     printf "%s | %-13s | completed: agent %s finished (exit 0, commits: %s, sha: advanced to %s)\n" \
       "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$AGENT_ID" "$COMMIT_RANGE" "${CURRENT_SHA:0:7}" >> "$LOG_FILE"
@@ -386,5 +420,5 @@ else
   disown "$BG_PID"
 fi
 
-hook_end "done: spawned agent $AGENT_ID (commits: $COMMIT_RANGE, timeout: ${MAX_TIMEOUT_SEC}s)" "$LOG_FILE"
+hook_end "done: spawned agent $AGENT_ID (commits: $COMMIT_RANGE, timeout: ${MAX_TIMEOUT_SEC}s, gate: $GATE_DETAIL)" "$LOG_FILE"
 exit 0
