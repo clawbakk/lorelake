@@ -193,12 +193,12 @@ strategy. The decision references the existing pages `rate-limiter` and
       "ops": [
         {
           "op": "frontmatter_add_related",
-          "items": ["[[adr-007-rate-limit-strategy]]"]
+          "items": ["[[adr-rate-limit-strategy]]"]
         },
         {
           "op": "append_section",
           "after_heading": "## Decisions",
-          "content": "- [[adr-007-rate-limit-strategy]] — chose token bucket over leaky bucket.\n"
+          "content": "- [[adr-rate-limit-strategy]] — chose token bucket over leaky bucket.\n"
         }
       ]
     },
@@ -208,14 +208,14 @@ strategy. The decision references the existing pages `rate-limiter` and
       "ops": [
         {
           "op": "frontmatter_add_related",
-          "items": ["[[adr-007-rate-limit-strategy]]"]
+          "items": ["[[adr-rate-limit-strategy]]"]
         }
       ]
     }
   ],
   "creates": [
     {
-      "slug": "adr-007-rate-limit-strategy",
+      "slug": "adr-rate-limit-strategy",
       "category": "decisions",
       "front_matter": {
         "title": "ADR-007: Rate Limit Strategy",
@@ -231,14 +231,14 @@ strategy. The decision references the existing pages `rate-limiter` and
   ],
   "deletes": [],
   "bidirectional_links": [
-    { "a": "adr-007-rate-limit-strategy", "b": "rate-limiter" },
-    { "a": "adr-007-rate-limit-strategy", "b": "auth-flow" }
+    { "a": "adr-rate-limit-strategy", "b": "rate-limiter" },
+    { "a": "adr-rate-limit-strategy", "b": "auth-flow" }
   ],
   "log_entry": {
     "operation": "ingest",
     "commit_range": "abc1234..def5678",
     "summary": "Add ADR-007 (rate-limit strategy) with bidirectional links to the affected modules.",
-    "pages_affected": ["adr-007-rate-limit-strategy", "rate-limiter", "auth-flow"]
+    "pages_affected": ["adr-rate-limit-strategy", "rate-limiter", "auth-flow"]
   }
 }
 ```

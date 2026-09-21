@@ -497,6 +497,145 @@ def _normalize_plan_text(text):
     raise ValueError("no JSON object found in planner output")
 
 
+def _strip_trailing_commas(text):
+    """Remove trailing commas before } or ] — string-aware.
+
+    A large plan is emitted as one JSON document by an LLM, and a stray trailing
+    comma is the single most common syntax slip. Wiki bodies are markdown and
+    routinely contain ", ]" or ", }" as prose, so this must never rewrite bytes
+    inside a string literal. Scans with the same state machine as step 3 above.
+    """
+    out = []
+    pending_comma = -1  # index in `out` of a comma awaiting a verdict
+    in_string = False
+    escape = False
+    for ch in text:
+        if escape:
+            out.append(ch)
+            escape = False
+            continue
+        if ch == "\\":
+            out.append(ch)
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            out.append(ch)
+            if not in_string:
+                continue
+            pending_comma = -1
+            continue
+        if in_string:
+            out.append(ch)
+            continue
+        if ch == ",":
+            out.append(ch)
+            pending_comma = len(out) - 1
+            continue
+        if ch in " \t\r\n":
+            out.append(ch)
+            continue
+        if ch in "}]" and pending_comma != -1:
+            out[pending_comma] = ""
+        pending_comma = -1
+        out.append(ch)
+    return "".join(out)
+
+
+def _parse_plan_text(text):
+    """Parse planner output into a dict, tolerating known LLM syntax slips.
+
+    Strict json.loads first — a well-formed plan is never rewritten. Only on a
+    JSONDecodeError do we strip trailing commas and retry. Anything still
+    unparseable raises ValueError: this recovers a known-benign slip, it does
+    not paper over genuinely corrupt output.
+    """
+    normalized = _normalize_plan_text(text)
+    try:
+        return json.loads(normalized)
+    except json.JSONDecodeError as strict_err:
+        try:
+            return json.loads(_strip_trailing_commas(normalized))
+        except json.JSONDecodeError:
+            raise ValueError(str(strict_err))
+
+
+ADR_SEQ_RE = re.compile(r"^adr-\d+-(?=.)")
+
+
+def _denumber_new_decision_slugs(plan):
+    """Strip the `adr-NNN-` sequence prefix from slugs this plan CREATES.
+
+    A zero-padded sequence is allocated by reading the local wiki, so two
+    branches or worktrees planning in parallel both observe the same highest
+    number and both claim NNN+1. Git then merges them as distinct files with no
+    conflict, leaving several pages sharing one number. Content-derived slugs
+    have no counter to contend on, so the collision cannot arise.
+
+    Only `creates[]` is rewritten: `updates[]` and `deletes[]` name pages that
+    already exist on disk under their historical numbered names. References to a
+    renamed slug are rewritten in step — `bidirectional_links`, the
+    `pages_affected` roll-up, and `[[wikilinks]]` anywhere in the plan.
+
+    Returns the plan (mutated in place). Renames are reported on stderr, which
+    the orchestrator folds into the agent log.
+    """
+    renames = {}
+    for c in plan.get("creates") or []:
+        if not isinstance(c, dict):
+            continue
+        slug = c.get("slug")
+        if not isinstance(slug, str):
+            continue
+        new_slug = ADR_SEQ_RE.sub("adr-", slug)
+        if new_slug != slug:
+            renames[slug] = new_slug
+
+    # Two creates collapsing onto one slug is a real conflict, not a numbering
+    # artifact. Leave those numbered so apply_create's AlreadyExists surfaces it.
+    collapsed = {v for v in renames.values() if list(renames.values()).count(v) > 1}
+    renames = {k: v for k, v in renames.items() if v not in collapsed}
+    if not renames:
+        return plan
+
+    link_subs = [(f"[[{old}]]", f"[[{new}]]") for old, new in renames.items()]
+
+    def _rewrite(node):
+        if isinstance(node, str):
+            for old_link, new_link in link_subs:
+                node = node.replace(old_link, new_link)
+            return node
+        if isinstance(node, list):
+            return [_rewrite(v) for v in node]
+        if isinstance(node, dict):
+            return {k: _rewrite(v) for k, v in node.items()}
+        return node
+
+    for key in ("summary", "updates", "creates", "deletes", "bidirectional_links",
+                "log_entry"):
+        if key in plan:
+            plan[key] = _rewrite(plan[key])
+
+    # Slug-valued fields hold a bare slug, not a [[wikilink]] — rewrite by value.
+    for c in plan.get("creates") or []:
+        if isinstance(c, dict) and isinstance(c.get("slug"), str):
+            c["slug"] = renames.get(c["slug"], c["slug"])
+    for link in plan.get("bidirectional_links") or []:
+        if isinstance(link, dict):
+            for side in ("a", "b"):
+                if isinstance(link.get(side), str):
+                    link[side] = renames.get(link[side], link[side])
+    le = plan.get("log_entry")
+    if isinstance(le, dict) and isinstance(le.get("pages_affected"), list):
+        le["pages_affected"] = [renames.get(s, s) if isinstance(s, str) else s
+                                for s in le["pages_affected"]]
+
+    for old, new in sorted(renames.items()):
+        print(f"apply_ingest_plan: de-numbered new decision slug {old!r} -> {new!r} "
+              "(sequence numbers collide across parallel branches)", file=sys.stderr)
+    return plan
+
+
 def _append_log_entry(llake_root, today, log_entry, has_failures, skip_reason=None, failures=None):
     log_path = llake_root / "log.md"
     if skip_reason:
@@ -550,17 +689,19 @@ def main():
         print(f"apply_ingest_plan: cannot read plan {args.plan}: {e}", file=sys.stderr)
         sys.exit(2)
     try:
-        normalized = _normalize_plan_text(raw)
+        _normalize_plan_text(raw)
     except ValueError as e:
         print(f"apply_ingest_plan: non-JSON planner output ({e}); first 200 chars: "
               f"{raw[:200]!r}", file=sys.stderr)
         sys.exit(2)
     try:
-        plan = json.loads(normalized)
-    except json.JSONDecodeError as e:
+        plan = _parse_plan_text(raw)
+    except ValueError as e:
         print(f"apply_ingest_plan: schema-invalid JSON in plan {args.plan}: {e}",
               file=sys.stderr)
         sys.exit(2)
+
+    plan = _denumber_new_decision_slugs(plan)
 
     schema_errors = plan_schema.validate(plan)
     if schema_errors:

@@ -99,7 +99,7 @@ op semantics.
 ### `frontmatter_add_related` — add to the related list (idempotent)
 
 ```json
-{ "op": "frontmatter_add_related", "items": ["[[adr-005]]", "[[runtime]]"] }
+{ "op": "frontmatter_add_related", "items": ["[[adr-token-bucket]]", "[[runtime]]"] }
 ```
 
 - Already-present items are skipped (idempotent).
