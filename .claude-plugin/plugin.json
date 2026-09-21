@@ -1,6 +1,6 @@
 {
   "name": "lorelake",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Compounding per-project wiki maintained by Claude Code on every session end and every merge.",
   "author": {
     "name": "Andrii Anistratov",
