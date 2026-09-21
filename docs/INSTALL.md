@@ -70,6 +70,43 @@ Local-path marketplaces are not cached — edits to hook scripts take effect on 
 
 4. From here on, LoreLake runs itself. Sessions end → capture may fire. Merges → ingest may fire.
 
+## Tuning ingest frequency
+
+Ingest is expensive — each run spawns a Claude agent. By default it does **not**
+run on every merge. A gate in the `post-merge` hook batches changes until one of
+two thresholds trips:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ingest.schedule.enabled` | `true` | Master switch for batching. `false` restores a run on every merge that touches include paths. |
+| `ingest.schedule.minChangedLines` | `1500` | Net lines changed (insertions + deletions) under `ingest.include` before ingest fires. |
+| `ingest.schedule.maxAgeHours` | `24` | How long a non-empty pile may sit before it fires regardless of size. |
+
+Merges that touch nothing under `ingest.include` are always skipped outright,
+even with batching disabled.
+
+Because `post-merge` is the only trigger, `maxAgeHours` is a rate limiter ("at
+most one ingest per 24h"), not a scheduler. A week with no merges produces no
+ingest — and a pile deferred before the quiet period stays queued, flushing on
+the next merge.
+
+The clock lives in `llake/.state/`, which is gitignored and therefore absent in
+a fresh clone. The hook seeds it with the current time on first run rather than
+treating it as overdue, so cloning a LoreLake-tracked project does not trigger
+an immediate ingest.
+
+Deferrals are logged to `llake/.state/hooks.log`, so you can tune from real data:
+
+```
+2026-09-20 14:22:10 | post-merge    | deferred: lines=412 files=3 age_h=6.1 need_lines=1500 need_age_h=24 (a1b2c3d..e4f5a6b)
+```
+
+**Forcing a run.** To ingest immediately regardless of the thresholds:
+
+```bash
+LLAKE_IGNORE_SCHEDULE=1 "$(git rev-parse --git-common-dir)/hooks/post-merge"
+```
+
 ## Verification
 
 Any time you suspect drift, run:

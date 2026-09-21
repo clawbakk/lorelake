@@ -31,7 +31,17 @@ These descriptions are for **plugin maintainers and curious users** — they are
 
 ## Ingest
 
-**Trigger:** Automated — git `post-merge` hook detects new commits on the configured branch and spawns a background Claude CLI agent.
+**Trigger:** Automated — git `post-merge` hook detects new commits on the configured branch. A batching gate then decides whether to spawn the background agent now, defer, or skip.
+
+**Gate:** Evaluated on every post-merge, before either pipeline spawns. The pile is the net range diff (`git diff --numstat <last-ingested>..HEAD -- <include-paths>`).
+
+- **Nothing changed under the include paths** → advance the cursor, skip the agent.
+- **Pile below `ingest.schedule.minChangedLines` AND younger than `ingest.schedule.maxAgeHours`** → hold the cursor and skip. The next merge sees the wider range; the cursor is the queue.
+- **Either arm trips** → spawn as usual.
+
+`ingest.schedule.enabled: false` disables the two batching arms but never the empty-pile skip. `LLAKE_IGNORE_SCHEDULE=1` forces a run, which is how a manual flush is performed.
+
+The age arm reads `llake/.state/last-ingest-at`. Because `.state/` is gitignored, that file is absent in a fresh clone; the hook seeds it with the current time rather than treating a missing clock as overdue, so a clone does not force an ingest on its first merge.
 
 **Process:**
 
@@ -41,7 +51,7 @@ These descriptions are for **plugin maintainers and curious users** — they are
 4. Update affected pages per Standards 1 + 3.
 5. Update category indexes for touched categories.
 6. Append entry to `log.md`.
-7. Write the new HEAD SHA to `llake/last-ingest-sha`.
+7. Write the new HEAD SHA to `llake/last-ingest-sha` and the current epoch seconds to `llake/.state/last-ingest-at`. These two always move together; `last-ingest-at` is the clock the gate's age arm reads.
 
 **Invariants after ingest:**
 

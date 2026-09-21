@@ -200,7 +200,7 @@ EOF
   n_applied=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(len(d['updates'])+len(d['creates'])+len(d['deletes']))" "$APPLIED")
   n_failed=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))))" "$FAILED")
 
-  echo "$CURRENT_SHA" > "$LLAKE_ROOT/last-ingest-sha"
+  advance_ingest_cursor "$CURRENT_SHA"
 
   echo "" >> "$AGENT_LOG"
   if [ "$n_failed" -eq 0 ]; then

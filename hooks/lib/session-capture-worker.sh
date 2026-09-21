@@ -241,7 +241,7 @@ EOF
     TRIAGE_ERR=$(cat "$TRIAGE_RENDER_ERR" 2>/dev/null)
     rm -f "$TRIAGE_RENDER_ERR"
     log_render_failure "TRIAGE" "$TRIAGE_RENDER_EXIT" "$TRIAGE_ERR" "$AGENT_LOG"
-    kill "$WATCHDOG_PID" 2>/dev/null
+    kill_tree "$WATCHDOG_PID"
     wait "$WATCHDOG_PID" 2>/dev/null
     rm -rf "$SESSION_DIR"
     ERR_SUMMARY=$(render_err_summary "$TRIAGE_ERR")
@@ -289,7 +289,7 @@ EOF
     echo "=== TRIAGE FAILED: exit $TRIAGE_EXIT at $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$AGENT_LOG"
     printf "%s | %-13s | triage-failed: agent %s (exit %s)\n" \
       "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" "$TRIAGE_AGENT_ID" "$TRIAGE_EXIT" >> "$LOG_FILE"
-    kill "$WATCHDOG_PID" 2>/dev/null
+    kill_tree "$WATCHDOG_PID"
     wait "$WATCHDOG_PID" 2>/dev/null
     rm -rf "$SESSION_DIR"
     exit 0
@@ -311,7 +311,7 @@ EOF
   if [ "$CLASSIFICATION" = "SKIP" ]; then
     echo "" >> "$AGENT_LOG"
     echo "=== SKIPPED: triage SKIP at $(date '+%Y-%m-%d %H:%M:%S') ===" >> "$AGENT_LOG"
-    kill "$WATCHDOG_PID" 2>/dev/null
+    kill_tree "$WATCHDOG_PID"
     wait "$WATCHDOG_PID" 2>/dev/null
     rm -rf "$SESSION_DIR"
     exit 0
@@ -338,7 +338,7 @@ EOF
     CAPTURE_ERR=$(cat "$CAPTURE_RENDER_ERR" 2>/dev/null)
     rm -f "$CAPTURE_RENDER_ERR"
     log_render_failure "CAPTURE" "$CAPTURE_RENDER_EXIT" "$CAPTURE_ERR" "$AGENT_LOG"
-    kill "$WATCHDOG_PID" 2>/dev/null
+    kill_tree "$WATCHDOG_PID"
     wait "$WATCHDOG_PID" 2>/dev/null
     rm -rf "$SESSION_DIR"
     ERR_SUMMARY=$(render_err_summary "$CAPTURE_ERR")
@@ -385,7 +385,7 @@ EOF
   rm -f "$CURRENT_PID_FILE"
 
   # Kill watchdog if agent finished naturally
-  kill "$WATCHDOG_PID" 2>/dev/null
+  kill_tree "$WATCHDOG_PID"
   wait "$WATCHDOG_PID" 2>/dev/null
 
   # Clean up session directory

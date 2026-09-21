@@ -9,6 +9,10 @@
 #   $PROJECT_DIR/llake/config.json   — minimal config matching the shipped defaults
 #                                      except for tight timeouts suitable for tests
 #   $PROJECT_DIR/llake/last-ingest-sha — baseline (HEAD after first commit)
+#   (batching is pinned OFF in config.json so pre-gate tests keep their
+#    original every-merge semantics. Gate tests override it per-test with
+#    set_schedule. The empty-pile skip still applies — it is not a
+#    scheduling policy.)
 #   $PROJECT_DIR/llake/wiki/     — empty dir
 #   $PROJECT_DIR/src/hello.txt   — a content file so `ingest.include: ["src/"]` matches
 #
@@ -54,7 +58,8 @@ mkproject() {
     "timeoutSeconds": 10,
     "branch": "main",
     "include": ["src/"],
-    "allowedTools": ["Read", "Write"]
+    "allowedTools": ["Read", "Write"],
+    "schedule": { "enabled": false, "minChangedLines": 1500, "maxAgeHours": 24 }
   },
   "logging": {
     "maxLines": 1000,

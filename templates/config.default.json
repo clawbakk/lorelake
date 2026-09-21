@@ -35,6 +35,12 @@
     "branch": "main",
     "include": ["src/"],
     "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+    "schedule": {
+      "_comment": "Batching gate. Evaluated on every post-merge; ingest runs when EITHER arm trips. enabled:false disables batching but NOT the empty-pile skip.",
+      "enabled": true,
+      "minChangedLines": 1500,
+      "maxAgeHours": 24
+    },
     "v2": {
       "_comment": "Settings for ingest pipeline v2 (planner + Python applier + fixer).",
       "plannerModel": "opus",

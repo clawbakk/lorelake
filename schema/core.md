@@ -25,7 +25,8 @@ llake/
 ├── .state/                     # Runtime working dir (gitignored)
 │   ├── agents/                 # Per-agent log files
 │   ├── sessions/               # Session lock + transcript extraction
-│   └── hooks.log               # Rolled hook audit log
+│   ├── hooks.log               # Rolled hook audit log
+│   └── last-ingest-at          # Clock the ingest batching gate's age arm reads
 └── wiki/
     ├── discussions/
     │   └── discussions.md      # Category index

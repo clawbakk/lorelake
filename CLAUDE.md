@@ -78,6 +78,7 @@ Session capture is **two-pass by design**: a cheap triage agent (short prompt, `
   wiki/<category>/*.md   # pages (fixed categories + project-specific)
   .state/                # gitignored runtime working dir
     hooks.log            # rolled hook audit log
+    last-ingest-at       # clock the ingest batching gate's age arm reads
     agents/<id>/         # per-agent working dir (agent.log, *.pid)
     sessions/<id>/       # transcript.md + lock meta for capture
 ```
