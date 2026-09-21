@@ -3,12 +3,13 @@ title: "Session Start Hook"
 description: "Context injection hook — loads session-preamble and llake/index.md at session start"
 tags: [hooks, session-start, context-injection]
 created: 2026-04-23
-updated: 2026-04-23
+updated: 2026-09-20
 status: current
 related:
   - "[[detect-project-root]]"
   - "[[is-llake-agent-guard]]"
   - "[[three-writer-model]]"
+  - "[[hook-log]]"
 ---
 
 ## Overview
@@ -110,6 +111,22 @@ Silent failures (e.g., `detect_project_root` finding no install, preamble file m
 
 If the hook exits nonzero, Claude Code may surface an error to the user. The `set -e` at the top of the script means any unexpected command failure propagates — but the early `|| exit 0` guards on `detect_project_root` and the guarded file reads (`[ -f "$FILE" ] && ...`) prevent most failure modes from reaching `set -e`.
 
+## hooks.log integration
+
+SessionStart used to be the only silent hook. It now sources `hooks/lib/hook-log.sh` and participates in the same audit log as the other two, so an operator reading `.state/hooks.log` sees context injection alongside ingest and capture activity. See [[hook-log]].
+
+The hook opens its line with `hook_start "session-start" ...` (`hooks/session-start.sh:44`) and closes it with one of three outcomes:
+
+| Outcome | Meaning |
+|---|---|
+| `context injected` | Preamble and/or index were assembled and emitted as `additionalContext` (`hooks/session-start.sh:89`) |
+| `skipped: recursion guard [<agent-id>]` | Fired inside a LoreLake agent's `claude -p` sub-session (`hooks/session-start.sh:49-52`) |
+| `skipped: no preamble or index` | Both files were absent or empty, so there was nothing to inject (`hooks/session-start.sh:60-63`) |
+
+There is a fourth case that stays silent: when `detect_project_root` fails there is no `llake/.state/` to log into, so the hook simply `exit 0`s (`hooks/session-start.sh:33`). This is the one outcome you will never see in the log, and it is the first thing to suspect when SessionStart appears to do nothing at all.
+
+The recursion guard matters for correctness, not just cost. The preamble tells the model not to edit `llake/` directly; injecting it into an ingest or capture agent's session would contradict that agent's own prompt, whose entire job is to write there.
+
 ## Key Points
 
 - Pure context injection — no agents, no file writes, no state changes.
@@ -119,6 +136,9 @@ If the hook exits nonzero, Claude Code may surface an error to the user. The `se
 - Output format must be `{ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "..." } }`.
 - Does not check `IS_LLAKE_AGENT` — no recursion risk since `claude -p` does not fire `SessionStart`.
 - Removing this hook means every session starts cold with no wiki awareness.
+- Logs to `.state/hooks.log` via [[hook-log]] with three outcomes: `context injected`, `skipped: recursion guard`, `skipped: no preamble or index`.
+- A missing project root is the one silent exit — there is nowhere to write the log line.
+- The recursion guard keeps the "don't edit `llake/` directly" preamble out of agent sessions whose job is to write there.
 
 ## Code References
 

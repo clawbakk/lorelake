@@ -10,6 +10,7 @@ related:
   - "[[triage-template]]"
   - "[[extract-transcript]]"
   - "[[is-llake-agent-guard]]"
+  - "[[session-capture-worker]]"
 ---
 
 # Troubleshoot Session Capture

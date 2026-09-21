@@ -1,3 +1,6 @@
+---
+updated: 2026-09-20
+---
 # Hooks
 
 Shell entry-point hooks and bash library modules. The hooks are wired into Claude Code and git; the lib modules are sourced by the hooks.
@@ -18,3 +21,4 @@ Shell entry-point hooks and bash library modules. The hooks are wired into Claud
 | [[agent-run]] | Kill-trap helpers, timeout watchdog, and cleanup for background agent processes |
 | [[constants]] | Shared shell constants used across LoreLake hooks |
 | [[detect-project-root]] | Three-level strategy to locate the project's llake/config.json from any shell context |
+| [[ingest-cursor]] | Advances last-ingest-sha and the .state/last-ingest-at clock together; seeds the clock in fresh clones |

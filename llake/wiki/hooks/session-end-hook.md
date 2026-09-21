@@ -1,9 +1,9 @@
 ---
 title: "Session End Hook"
-description: "Two-pass triage→capture hook that records session knowledge to the wiki"
+description: "SessionEnd foreground dispatcher (~10ms) that hands off to the detached two-pass triage→capture worker"
 tags: [hooks, session-end, capture, triage, two-pass]
 created: 2026-04-23
-updated: 2026-04-23
+updated: 2026-09-20
 status: current
 related:
   - "[[three-writer-model]]"
@@ -17,13 +17,18 @@ related:
   - "[[is-llake-agent-guard]]"
   - "[[adr-002-two-pass-triage]]"
   - "[[config-schema]]"
+  - "[[session-capture-worker]]"
+  - "[[hook-log]]"
+  - "[[claude-p-tools-flag]]"
 ---
 
 ## Overview
 
-`hooks/session-end.sh` fires when a Claude Code session ends. It implements the **capture writer**: it extracts the session transcript, runs a cheap triage agent to decide whether the session is worth capturing, then — only if the answer is yes — spawns a full capture agent to write wiki pages and discussion entries.
+`hooks/session-end.sh` fires when a Claude Code session ends. It is the entry point of the **capture writer**, which extracts the session transcript, runs a cheap triage agent to decide whether the session is worth capturing, and — only if the answer is yes — runs a full capture agent that writes wiki pages and discussion entries.
 
-The hook runs entirely in the background and is detached from the closing session with `disown`. The user's Claude Code process exits immediately; the agents continue asynchronously in `<project>/llake/.state/`.
+The script itself is now only a **foreground dispatcher**. It does five things in pure bash — marker-walk for the project root, check the recursion guard, persist stdin to a tempfile, write one `hooks.log` line, and `nohup` the worker — then exits. There are no `python3` calls in it at all. Everything described in the walkthrough below runs in `hooks/lib/session-capture-worker.sh`, documented at [[session-capture-worker]].
+
+The split exists for latency. The hook previously made roughly twenty sequential `python3` calls in the foreground (config reads, transcript extraction, agent dispatch) even though the agents themselves were already detached, costing 1.5–3s of visible delay on every `/exit` and `/clear`. The foreground is now about 10ms.
 
 If this hook were removed or broken, no session knowledge would ever flow into the wiki automatically. The wiki would only grow via `/llake-bootstrap` (initial population) and the post-merge ingest (code changes). Conversational decisions, gotchas surfaced in chat, and architectural reasoning discussed with Claude would be lost.
 
@@ -75,7 +80,28 @@ Pass 2: capture agent (full — all allowed tools, maxBudgetUsd cap, captureMode
 
 The triage agent is intentionally constrained: `--allowedTools Read`, hard-coded `--max-budget-usd 0.50`. It reads the transcript and outputs a single-line classification: `CAPTURE: <reason>`, `PARTIAL: <reason>`, or `SKIP: <reason>`. This keeps background cost bounded even at high session volume — only sessions with genuine knowledge pass to the expensive capture agent.
 
-## Step-by-step walkthrough
+## Foreground dispatcher
+
+```bash
+PROJECT_ROOT=$(detect_project_root "$PWD" 2>/dev/null) || exit 0
+# ... recursion guard ...
+TMP_INPUT=$(mktemp -t llake-session-end.XXXXXX)
+cat > "$TMP_INPUT"
+hook_log_line "session-end" "dispatched (async)" "$LOG_FILE"
+nohup bash "$LIB_DIR/session-capture-worker.sh" "$TMP_INPUT" </dev/null >/dev/null 2>&1 &
+disown $!
+```
+
+Notes on the ordering and the two env hooks:
+
+- **stdin is persisted before the log line is written.** The hook must consume its stdin pipe before anything else can block on it; the worker then reads the tempfile and deletes it.
+- `hook_log_line` is used rather than the `hook_start`/`hook_end` pair, because the foreground has no paired outcome to report — it only records `dispatched (async)`. The worker opens its own `hook_start` line under the name `session-capture-worker`. See [[hook-log]].
+- `LLAKE_SESSION_END_SYNC=1` makes the hook `exec` the worker instead of forking it, forcing synchronous execution for debugging and for tests that assert on final state.
+- `LLAKE_LIB_DIR_OVERRIDE` is a test-only seam that lets `tests/hooks/test_session_end_foreground.sh` swap in a recorder worker and assert on what the foreground passed it.
+
+The recursion guard fires in the foreground (`hooks/session-end.sh:39-42`) *and* again in the worker — belt and suspenders, since the worker can also be invoked directly.
+
+## Step-by-step walkthrough (runs in the worker)
 
 ### 1. Parse stdin
 
@@ -237,14 +263,16 @@ After `timeoutSeconds`, it sends `USR1` to the outer subshell's PID. `setup_kill
 IS_LLAKE_AGENT=true LLAKE_AGENT_ID="$TRIAGE_AGENT_ID" \
   claude --model "$TRIAGE_MODEL" --effort "$TRIAGE_EFFORT" \
   -p "$TRIAGE_PROMPT" \
+  --tools "Read" \
   --allowedTools "Read" \
+  --strict-mcp-config \
   --max-budget-usd 0.50 \
   --output-format stream-json --verbose 2>&1 \
   | python3 "$FORMATTER" --extract-result "$TRIAGE_RESULT_FILE" >> "$AGENT_LOG"
 ```
 
 Key constraints:
-- `--allowedTools "Read"` — the triage agent cannot write anything.
+- `--tools "Read"` — the triage agent cannot write anything. `--allowedTools` is passed too, but it is `--tools` that actually restricts the built-in set in `-p` mode, and `--strict-mcp-config` that keeps ambient MCP servers out. See [[claude-p-tools-flag]].
 - `--max-budget-usd 0.50` — hard-coded cap, not configurable; triage must be cheap.
 - Output piped through [[format-agent-log]] with `--extract-result` to save the final text response to `triage-result.txt`.
 
@@ -265,7 +293,9 @@ Only runs when `CLASSIFICATION` is `CAPTURE` or `PARTIAL`:
 IS_LLAKE_AGENT=true LLAKE_AGENT_ID="$CAPTURE_AGENT_ID" \
   claude --model "$CAPTURE_MODEL" --effort "$CAPTURE_EFFORT" \
   -p "$CAPTURE_PROMPT" \
+  --tools "$ALLOWED_TOOLS" \
   --allowedTools "$ALLOWED_TOOLS" \
+  --strict-mcp-config \
   --max-budget-usd "$MAX_BUDGET_USD" \
   --output-format stream-json --verbose 2>&1 \
   | python3 "$FORMATTER" >> "$AGENT_LOG" &
@@ -326,17 +356,26 @@ If the hook process is killed mid-line (e.g., system shutdown), the next hook in
 - Triage defaults to `CAPTURE` if the result file is missing (safe-open failure mode).
 - All session state lives under `.state/sessions/<id>/` and is cleaned up after capture.
 - Agent logs are retained under `.state/agents/<id>/agent.log` for post-hoc inspection.
+- The script is a ~40-line pure-bash dispatcher; the two-pass logic lives in [[session-capture-worker]].
+- Foreground time is ~10ms; it was 1.5–3s before the split, which users saw as a delay on `/exit` and `/clear`.
+- stdin must be consumed into a tempfile before anything else — the worker reads and deletes that file.
+- `LLAKE_SESSION_END_SYNC=1` runs the worker synchronously; `LLAKE_LIB_DIR_OVERRIDE` is the test seam.
 
 ## Code References
 
-- `hooks/session-end.sh:1-350` — full hook implementation
-- `hooks/session-end.sh:64-67` — recursion guard check
-- `hooks/session-end.sh:171-181` — thin-session filter (turns and words)
-- `hooks/session-end.sh:184-196` — session lock logic
-- `hooks/session-end.sh:221-346` — background subshell (watchdog, triage pass, capture pass)
-- `hooks/session-end.sh:257-263` — triage agent invocation (Read-only, $0.50 cap)
-- `hooks/session-end.sh:311-317` — capture agent invocation (full tool set, configured budget)
-- `hooks/hooks.json:9-16` — `SessionEnd` registration
+- `hooks/session-end.sh:1-60` — the whole foreground dispatcher
+- `hooks/session-end.sh:31` — marker-walk project-root detection
+- `hooks/session-end.sh:39-42` — foreground recursion guard
+- `hooks/session-end.sh:45-49` — stdin persisted to a tempfile, then the dispatch log line
+- `hooks/session-end.sh:52-58` — `LLAKE_SESSION_END_SYNC` escape hatch and the `nohup`/`disown` fork
+- `hooks/lib/session-capture-worker.sh:49-55` — worker `hook_start` and its own recursion guard
+- `hooks/lib/session-capture-worker.sh:131-170` — transcript extraction and thin-session filters
+- `hooks/lib/session-capture-worker.sh:173-191` — session lock
+- `hooks/lib/session-capture-worker.sh:269-277` — triage invocation
+- `hooks/lib/session-capture-worker.sh:361-378` — capture invocation
+- `tests/hooks/test_session_end_foreground.sh` — foreground dispatch and recursion-guard tests
+- `tests/hooks/test_session_capture_worker.sh` — worker happy path, timeout, render-failure, and flag assertions
+- `hooks/hooks.json` — `SessionEnd` registration
 
 ## See Also
 

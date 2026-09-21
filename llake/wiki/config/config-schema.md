@@ -3,7 +3,7 @@ title: "Configuration Schema"
 description: "Complete reference for all config.json keys, defaults, types, and effects"
 tags: [config, reference, schema]
 created: 2026-04-23
-updated: 2026-04-23
+updated: 2026-09-20
 status: current
 related:
   - "[[config-layering]]"
@@ -12,6 +12,11 @@ related:
   - "[[post-merge-hook]]"
   - "[[session-start-hook]]"
   - "[[three-writer-model]]"
+  - "[[ingest-v2-pipeline]]"
+  - "[[enable-ingest-v2]]"
+  - "[[claude-p-tools-flag]]"
+  - "[[planner-plan-json-fragility]]"
+  - "[[ingest-gate]]"
 ---
 
 # Configuration Schema
@@ -68,7 +73,15 @@ The file below is `templates/config.default.json` with inline commentary explain
     "timeoutSeconds": 1200,
     "branch": "main",
     "include": ["src/"],
-    "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
+    "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+    // Batching gate: evaluated on every post-merge; ingest runs when EITHER arm trips.
+    "schedule": {
+      "_comment": "Batching gate. Evaluated on every post-merge; ingest runs when EITHER arm trips. enabled:false disables batching but NOT the empty-pile skip.",
+      "enabled": true,
+      "minChangedLines": 1500,
+      "maxAgeHours": 24
+    }
+    // "pipeline" and "v2" are documented under ingest.pipeline / ingest.v2.* below
   },
 
   // ── lint ─────────────────────────────────────────────────────────────────
@@ -407,6 +420,61 @@ Same enforcement mechanism as `sessionCapture.allowedTools` — passed to `claud
 **What breaks if wrong:** Removing `Bash` prevents the agent from inspecting git history. Removing `Write`/`Edit` prevents it from updating wiki pages. As with capture, adding unexpected tools is a security risk.
 
 ---
+---
+
+#### `ingest.pipeline`
+
+| Attribute | Value |
+|-----------|-------|
+| Type | `string` |
+| Default | `"legacy"` |
+| Accepted | `"legacy"`, `"v2"` |
+
+Selects which ingest implementation `hooks/post-merge.sh` runs. `"legacy"` spawns a single `claude -p` agent that reads diffs and writes wiki files itself. `"v2"` runs the planner → Python applier → fixer pipeline described in [[ingest-v2-pipeline]].
+
+**What breaks if wrong:** the comparison is against the literal string `v2`; **any other value — including a typo like `"V2"` or `"ingest-v2"` — silently falls through to legacy**. Nothing errors, so the symptom is "v2 never seems to run". `/llake-doctor` warns on an unrecognised value for exactly this reason. See [[enable-ingest-v2]].
+
+---
+
+#### `ingest.v2.*`
+
+The whole `v2` sub-object is only read when `ingest.pipeline` is `"v2"`. It is deliberately separate from the top-level `ingest.*` keys so switching pipelines does not require re-tuning the legacy ones — and so you can switch back instantly.
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `plannerModel` | `string` | `"opus"` | Model for the planner agent. Empty → no `--model` flag, CLI default applies. |
+| `plannerEffort` | `string` | `"high"` | Effort for the planner. Empty → no `--effort` flag. |
+| `plannerBudgetUsd` | `number` | `5.00` | `--max-budget-usd` for the planner. |
+| `plannerAllowedTools` | `array` | `["Read", "Glob", "Grep"]` | Planner tool allowlist. Read-only by design — the planner emits a plan, it never writes. |
+| `fixerModel` | `string` | `"opus"` | Model for the fixer agent. |
+| `fixerEffort` | `string` | `"medium"` | Effort for the fixer — lower than the planner's; repairing rejected ops is a narrower task. |
+| `fixerBudgetUsd` | `number` | `2.00` | `--max-budget-usd` for the fixer. |
+| `fixerAllowedTools` | `array` | `["Read", "Glob", "Grep"]` | Fixer tool allowlist; also read-only. |
+| `maxFixerRetries` | `integer` | `1` | `0` disables the fixer pass entirely; failures are then reported and left for a human. |
+| `diffChunkBytes` | `integer` | `2000` | Per-file diff files larger than this are split on hunk boundaries into numbered chunks. |
+| `timeoutSeconds` | `integer` | `1200` | Watchdog for the whole v2 run — **separate from `ingest.timeoutSeconds`**, which v2 does not read. |
+
+Both `*AllowedTools` arrays are **hard requirements**: if either is missing or fails to parse, `run_ingest_v2` prints an error and returns 1 rather than falling back to a default allowlist. Silently running an agent with tools nobody chose is worse than not running it.
+
+Note that `ingest.branch`, `ingest.include`, and `ingest.enabled` are still read from the top level — the shared preamble in the hook runs before the pipeline branch. There is no `ingest.v2.include`.
+
+**What breaks if wrong:** a `plannerBudgetUsd` set too low truncates the plan mid-JSON, which is unrecoverable (see [[planner-plan-json-fragility]]); an over-large `diffChunkBytes` produces individual patch files the planner may not read in full.
+
+#### `ingest.schedule.*`
+
+The batching gate evaluated on every post-merge, before either pipeline spawns. It measures the net `git diff --numstat` of the range under `ingest.include` and runs ingest only when **either** arm trips. Otherwise it defers and holds `last-ingest-sha`, so the next merge sees the accumulated range. See [[ingest-gate]].
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `enabled` | `boolean` | `true` | `false` turns off both batching arms, so every merge that touches an include path runs immediately. The empty-pile skip (nothing under `ingest.include` changed) **still applies**. |
+| `minChangedLines` | `integer` | `1500` | Lines arm. Run when the net added+deleted lines under `ingest.include` since the last ingest reach this value. |
+| `maxAgeHours` | `number` | `24` | Age arm. Run when this many hours have passed since `.state/last-ingest-at`, however small the pile. It is only evaluated when a merge fires the hook, so it is not a timer. |
+
+These keys apply to both the legacy and v2 pipelines. `LLAKE_IGNORE_SCHEDULE=1` in the hook's environment forces a run for one invocation (a manual flush). It is an environment variable, not a config key. The gate script has no defaults of its own: the hook reads these values through `read-config.py` and passes them as required flags.
+
+**What breaks if wrong:** a non-numeric `minChangedLines` or `maxAgeHours` makes the gate exit 2 on argument parsing. The hook then fails open, so every merge runs with `gate: reason=gate-error` in `hooks.log` and batching is silently off. Very high thresholds defer ingest until the age arm trips, so the wiki lags by at least `maxAgeHours`, and longer when merges are sparse.
+
+---
 
 ### `lint` section
 
@@ -586,6 +654,7 @@ A string injected into the ingest prompt template's `{{EXAMPLES}}` slot. When no
 - `allowedTools` in both `sessionCapture` and `ingest` is a **hard shell-level enforcement boundary**, not just a hint to the agent prompt. The hook passes the value directly to `claude -p --allowedTools`.
 - `sessionCapture.writableCategories` is both a prompt-level constraint (injected into the agent's instructions) and a design-level boundary. It should mirror `llake.fixedCategories` unless you have intentionally added project-specific categories.
 - The `prompts.ingest.EXAMPLES` key is the primary lever for tuning ingest output quality without modifying plugin code.
+- `ingest.schedule.*` is the primary lever for ingest **cost**: it batches small merges into one run. `enabled: false` restores run-per-merge but never disables the empty-pile skip.
 
 ---
 
@@ -597,6 +666,9 @@ A string injected into the ingest prompt template's `{{EXAMPLES}}` slot. When no
 - `hooks/lib/read-config.py:41-48` — `format_value()` serializes booleans as `"true"`/`"false"`, arrays/objects as JSON, `null` as `""`
 - `hooks/session-end.sh` — reads `sessionCapture.*` keys and constructs `--allowedTools` flag
 - `hooks/post-merge.sh` — reads `ingest.*` keys and constructs `--allowedTools` flag
+- `hooks/post-merge.sh:182-184` — reads `ingest.schedule.enabled` / `minChangedLines` / `maxAgeHours` for the gate
+- `hooks/lib/ingest_gate.py` — consumes the `ingest.schedule.*` values as required CLI flags, with no defaults of its own
+- `tests/lib/test_read_config.py` — covers the `ingest.schedule.*` defaults resolving through the fallback
 
 ---
 

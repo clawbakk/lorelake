@@ -3,11 +3,13 @@ title: "ADR-001: Ingest Runs on post-merge, Not post-commit"
 description: "Why ingest triggers on git merge rather than every commit — cost, noise, and trustworthiness"
 tags: [decisions, architecture]
 created: 2026-04-23
-updated: 2026-04-23
+updated: 2026-09-20
 status: current
 related:
   - "[[post-merge-hook]]"
   - "[[three-writer-model]]"
+  - "[[adr-plan-apply-split]]"
+  - "[[ingest-gate]]"
 ---
 
 # ADR-001: Ingest Runs on post-merge, Not post-commit
@@ -25,7 +27,7 @@ There are two natural trigger points in a git workflow:
 - **post-commit** — fires after every local `git commit`, including WIP commits, amends, fixups, and rebased fragments.
 - **post-merge** — fires after `git pull` completes (or after a merge commit lands), meaning it captures a batch of commits that made it into the branch from elsewhere.
 
-The `ingest.branch` config key (defaulting to `main`) specifies which branch is monitored. The hook reads `last-ingest-sha` to know the previous position and compares it against the current `HEAD` to detect new commits. A pre-flight diff check further skips runs where no `ingest.include` paths changed.
+The `ingest.branch` config key (defaulting to `main`) specifies which branch is monitored. The hook reads `last-ingest-sha` to know the previous position and compares it against the current `HEAD` to detect new commits. A batching gate then skips runs where no `ingest.include` paths changed, and defers small, recent piles until enough churn or time accumulates (see [[ingest-gate]]).
 
 See [[post-merge-hook]] for the full implementation.
 
@@ -62,7 +64,7 @@ See [[post-merge-hook]] for the full implementation.
 
 - The wiki documents the project's canonical, merged state — not transient work-in-progress. This is consistent with what documentation should capture.
 - Cost is bounded to roughly one ingest run per pull/merge event rather than per commit.
-- The pre-flight diff check (`git diff --name-only $LAST_SHA..$CURRENT_SHA -- "${INCLUDE_PATHS[@]}"`) ensures the agent is not spawned when only non-included files changed, further reducing unnecessary runs.
+- The batching gate ([[ingest-gate]]) ensures the agent is not spawned when only non-included files changed. It also batches small merges: ingest runs only once the net range diff reaches `ingest.schedule.minChangedLines`, or `ingest.schedule.maxAgeHours` have passed since the last ingest. Cost is therefore bounded by churn and time rather than by merge count. The gate only evaluates when a merge fires the hook, so its age arm is not a timer. That is consistent with rejecting cron polling above.
 
 ## See Also
 

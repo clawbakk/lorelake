@@ -3,7 +3,7 @@ title: "Three-Writer Model"
 description: "How bootstrap, ingest, and capture divide write surface and responsibilities"
 tags: [architecture, writers, agents, hooks]
 created: 2026-04-23
-updated: 2026-04-23
+updated: 2026-09-20
 status: current
 related:
   - "[[session-start-hook]]"
@@ -12,6 +12,9 @@ related:
   - "[[llake-bootstrap-skill]]"
   - "[[runtime-layout]]"
   - "[[plugin-project-duality]]"
+  - "[[ingest-v2-pipeline]]"
+  - "[[apply-ingest-plan]]"
+  - "[[adr-plan-apply-split]]"
 ---
 
 ## Overview
@@ -199,6 +202,22 @@ The three writers do not communicate at runtime — they share only the wiki fil
 
 ---
 
+## Two implementations of the ingest writer
+
+The three-writer model describes *roles*, not processes, and the ingest role now has two interchangeable implementations selected by `ingest.pipeline`:
+
+| | Legacy | v2 |
+|---|---|---|
+| Agents per run | 1 | 1 planner + optionally 1 fixer |
+| Who writes wiki files | the agent, via `Write`/`Edit` | `apply_ingest_plan.py` |
+| Agent tool allowlist | `Read, Write, Edit, Glob, Grep, Bash` | `Read, Glob, Grep` |
+| Write-surface enforcement | prompt rules + `--tools` | prompt rules + a Python path guard |
+| Failure granularity | whole run | per-operation, with a repair pass |
+
+The v2 planner is **read-only**. It emits a JSON plan and never touches the wiki; a Python applier executes it. This changes the character of the safety rails for this writer: forbidden paths are no longer a thing an agent is asked not to do, they are a thing `check_write_path` refuses to do. `wiki/discussions/**` is not merely off-limits to ingest under v2 — the wiki walker skips it entirely, so it is invisible to scrubbing, inline-link scanning, and slug resolution. The boundary between the ingest writer and the capture writer is enforced in code rather than by convention.
+
+Capture and bootstrap are unchanged: both still write files directly. See [[ingest-v2-pipeline]] and [[apply-ingest-plan]].
+
 ## Key Points
 
 - Bootstrap is in-session (foreground, `Task` tool), ingest and capture are background `claude -p` agents.
@@ -209,6 +228,9 @@ The three writers do not communicate at runtime — they share only the wiki fil
 - Write surfaces are enforced both at the shell level (`--allowedTools`) and in prompt instructions.
 
 ---
+- The ingest *role* has two implementations (`ingest.pipeline`: `legacy` or `v2`); the role's boundaries are identical either way.
+- Under v2 the ingest agent is read-only and a Python applier performs every write, so the write surface is enforced in code.
+- `wiki/discussions/**` is invisible to the v2 applier's wiki walker, not merely forbidden to it.
 
 ## Code References
 

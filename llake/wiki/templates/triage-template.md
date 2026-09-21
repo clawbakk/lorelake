@@ -10,6 +10,7 @@ related:
   - "[[capture-template]]"
   - "[[adr-002-two-pass-triage]]"
   - "[[template-system]]"
+  - "[[session-capture-worker]]"
 ---
 
 ## Overview

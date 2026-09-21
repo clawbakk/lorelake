@@ -3,7 +3,7 @@ title: "/llake-bootstrap — Initial Wiki Population"
 description: "One-time in-session orchestrator that populates the wiki from scratch via parallel subagents"
 tags: [skills, bootstrap, wiki]
 created: 2026-04-23
-updated: 2026-04-23
+updated: 2026-09-20
 status: current
 related:
   - "[[llake-lady-skill]]"
@@ -139,6 +139,14 @@ Bootstrap has no per-session config knobs of its own. Model, reasoning effort, t
 
 ---
 
+## Subagent concurrency cap
+
+Phase 4 dispatched every task in the plan in parallel with no limit. On a large codebase that meant 10 or more subagents firing simultaneously, which stressed rate limits and made the session's token consumption unpredictable — the user could not tell in advance what a bootstrap would cost.
+
+The cap is **5 concurrent subagents**; tasks beyond that are batched and run as slots free up. The number is hard-coded, deliberately: there is still no `bootstrap.*` config key, and the "no bootstrap config" contract stands. Everything else about the run — model, effort, budget, timeout — comes from the user's own Claude Code session, because bootstrap runs in that session rather than spawning `claude -p`. Only `ingest.include` is read from `config.json`.
+
+Practical consequence: a large plan takes longer in wall-clock time than it used to, and the log shows tasks completing in waves rather than all at once. That is the intended trade.
+
 ## Key Points
 
 - Bootstrap runs **in the foreground session** — no background process, no extra budget. The model and limits are whatever the user set when starting Claude Code.
@@ -149,6 +157,8 @@ Bootstrap has no per-session config knobs of its own. Model, reasoning effort, t
 - Subagents never touch `wiki/discussions/**` — that namespace is session-capture's alone.
 
 ---
+- Phase 4 runs at most 5 subagents concurrently; the rest are batched. The cap is hard-coded, not configurable.
+- The "no `bootstrap.*` config keys" contract is unchanged — only `ingest.include` is read from `config.json`.
 
 ## What to do if it fails
 

@@ -3,7 +3,7 @@ title: "/llake-doctor — Diagnose and Repair"
 description: "Idempotent health checker that diagnoses and repairs LoreLake install drift"
 tags: [skills, maintenance, repair]
 created: 2026-04-23
-updated: 2026-04-23
+updated: 2026-09-20
 status: current
 related:
   - "[[llake-lady-skill]]"
@@ -11,6 +11,7 @@ related:
   - "[[llake-lint-skill]]"
   - "[[runtime-layout]]"
   - "[[config-schema]]"
+  - "[[enable-ingest-v2]]"
 ---
 
 # /llake-doctor — Diagnose and Repair
@@ -141,6 +142,30 @@ The summary line always appears last. Partial outcomes append counts for failed 
 
 ---
 
+## Newer checks and repairs
+
+Four capabilities were added to doctor after the original check list was written.
+
+### Check 0 — `python3` availability
+
+All four hot-path scripts (`read-config.py`, `render-prompt.py`, `extract_transcript.py`, `format-agent-log.py`) assume `python3` is on `PATH`, and many hook invocations pipe stderr to `/dev/null` — so without it the hooks fail *silently*. Doctor now probes for `python3 >= 3.8` before anything else, reports its absence as the highest-priority issue, and **skips every later check**, because their results would be meaningless. `/llake-lady` performs the same probe and aborts the install outright. 3.8 is a conservative floor: every script is stdlib-only with no version-specific dependencies.
+
+### Existing post-merge hook: chain, never clobber
+
+Doctor previously wrote `.git/hooks/post-merge` unconditionally, destroying any husky, lefthook, or hand-rolled hook already there. Fix 3 now detects a collision and asks the user whether to chain or skip. The chaining shim runs the plugin first, then the backed-up original at `.git/hooks/post-merge.pre-llake`; **the original's exit code takes precedence**, so a user hook's failure is not swallowed by the plugin succeeding. The backup is created once and doctor never deletes it. `/llake-lady` asks the same question in its own Phase 2.5. See [[llake-lady-skill]].
+
+### Orphaned install-plan sweep
+
+The install plan moved from `llake/install-plan.md` (not gitignored — users committed it by accident) to `llake/.state/install-plan.md`, and the executor deletes it after Phase 4. Doctor sweeps any plan file left behind by an interrupted run.
+
+### Unknown `ingest.pipeline` value
+
+`hooks/post-merge.sh` compares `ingest.pipeline` against the literal string `v2` and treats everything else as legacy — silently. A typo therefore presents as "v2 is configured but never runs". Doctor warns when the value is neither `legacy` nor `v2`. See [[enable-ingest-v2]].
+
+### On `disable-model-invocation: true`
+
+The flag blocks only *autonomous* discovery by the model. Explicit `/llake-doctor` invocations and `Skill`-tool calls still work — which is what makes the install plan's Phase 4 invocation of doctor legitimate rather than a contradiction.
+
 ## Key Points
 
 - Doctor is fully idempotent — safe to run any number of times.
@@ -151,6 +176,11 @@ The summary line always appears last. Partial outcomes append counts for failed 
 - The `[CHECK]` section of the report shows pre-repair state, making before/after comparison easy.
 
 ---
+- Check 0 probes for `python3 >= 3.8` and short-circuits every later check if it is missing — without it, hooks fail silently.
+- Fix 3 chains an existing `post-merge` hook via `.git/hooks/post-merge.pre-llake` instead of clobbering it; the original's exit code wins.
+- Doctor sweeps orphaned `llake/.state/install-plan.md` files from interrupted installs.
+- Doctor warns on an `ingest.pipeline` value other than `legacy` or `v2`, because the hook treats unknown values as legacy without complaint.
+- `disable-model-invocation: true` blocks autonomous discovery only; explicit and `Skill`-tool invocations are still allowed.
 
 ## Code References
 

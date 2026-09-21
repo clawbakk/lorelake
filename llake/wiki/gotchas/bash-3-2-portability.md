@@ -8,6 +8,9 @@ status: current
 related:
   - "[[agent-run]]"
   - "[[adr-003-bash-3-2-portability]]"
+  - "[[post-merge-lock]]"
+  - "[[ingest-cursor]]"
+  - "[[watchdog-sleep-orphans]]"
 ---
 
 # Bash 3.2 Portability

@@ -3,13 +3,14 @@ title: "/llake-lady — Install Wizard"
 description: "Sets up llake/ in a project, wires the post-merge hook, and runs doctor to verify"
 tags: [skills, install, setup]
 created: 2026-04-23
-updated: 2026-04-23
+updated: 2026-09-20
 status: current
 related:
   - "[[llake-doctor-skill]]"
   - "[[llake-bootstrap-skill]]"
   - "[[plugin-project-duality]]"
   - "[[runtime-layout]]"
+  - "[[config-schema]]"
 ---
 
 # /llake-lady — Install Wizard
@@ -140,6 +141,30 @@ The plan is deliberately self-contained. Any future Claude Code session can resu
 
 ---
 
+## Later additions to the wizard
+
+Five changes to the install flow, in the order a user meets them.
+
+### Prerequisite: `python3 >= 3.8`
+
+Lady probes for `python3` before doing anything and **aborts with remediation instructions** if it is missing. This is not a nicety: several hook invocations pipe stderr to `/dev/null`, so an install completed without `python3` produces hooks that fail silently forever. `/llake-doctor` reports the same condition as its Check 0. See [[llake-doctor-skill]].
+
+### Phase 2.5 — existing `post-merge` hook
+
+If `.git/hooks/post-merge` already exists (husky, lefthook, or hand-rolled), the install used to overwrite it. Phase 2.5 detects the collision and asks — **in both auto and interactive modes** — whether to chain the existing hook or skip installing LoreLake's. Chaining backs the original up to `.git/hooks/post-merge.pre-llake` and runs it after the plugin, with the original's exit code taking precedence so its failures are not masked.
+
+### Phase 3.5 — `ingest.branch` and `ingest.include`
+
+Auto mode used to write `ingest.include: ["src/"]` unconditionally, which is simply wrong for any repo without a `src/` directory — the pre-flight relevance check would then skip every merge. Phase 3.5 now asks for both values regardless of mode, offering discovered defaults: the git `HEAD` branch, and the top-level code directories filtered against a known noise list. See [[config-schema]].
+
+### The install plan lives in `.state/`
+
+The plan moved from `llake/install-plan.md` to `llake/.state/install-plan.md`. The old path was not gitignored, so users either committed it by accident or had to remember to delete it. The executor now deletes the plan after Phase 4, and doctor sweeps orphans left by interrupted runs.
+
+### Phase 8 — start a fresh session before `/llake-bootstrap`
+
+The completion summary explicitly recommends opening a **new** Claude Code session before running `/llake-bootstrap`. Bootstrap dispatches subagents in parallel and consumes a lot of context and budget; running it in the same session as lady routinely pushes users past their comfortable session limits. There is a second reason to start fresh: SessionStart snapshots the wiki at session start, so the session that builds the wiki can never see it. See [[session-preamble-snapshot-timing]].
+
 ## Key Points
 
 - The wizard writes exactly two files: `llake/config.json` and `llake/install-plan.md`. The executor writes everything else.
@@ -150,6 +175,11 @@ The plan is deliberately self-contained. Any future Claude Code session can resu
 - The skill never auto-installs git, python, or any other tool. If a prerequisite is missing, it stops and tells you exactly what to fix.
 
 ---
+- Aborts up front if `python3 >= 3.8` is missing — otherwise the resulting install fails silently.
+- Phase 2.5 detects an existing `.git/hooks/post-merge` and offers to chain it rather than clobber it, in both modes.
+- Phase 3.5 prompts for `ingest.branch` and `ingest.include` in both modes; auto mode no longer assumes `src/`.
+- The install plan lives at `llake/.state/install-plan.md` (gitignored) and is deleted after Phase 4.
+- Phase 8 recommends a fresh Claude Code session before `/llake-bootstrap`.
 
 ## Code References
 

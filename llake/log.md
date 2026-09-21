@@ -95,3 +95,11 @@ Pages affected: [[runtime-layout]], [[post-merge-hook]], [[capture-template]], [
 Captured a session that clarified why no LoreLake skill edits CLAUDE.md (SessionStart injects context live instead) and identified a new gotcha: the session running /llake-bootstrap can't see the wiki it just created because session-start.sh snapshots index.md once, before bootstrap writes anything. Added a bootstrap-stale-context case to the debug-hook-failures playbook.
 
 Pages affected: [[2026-09-16-claude-md-vs-session-preamble]], [[session-preamble-snapshot-timing]], [[debug-hook-failures]]
+
+## [2026-09-20] ingest | v2 | dfe0614..b3c9116 | Document the ingest v2 pipeline (planner → Python applier → fixer) and the hook refactors that landed alongside it: shared hook-log.sh, the backgrounded session-capture worker, the post-merge concurrency lock, and the --tools/--strict-mcp-config permission fix.
+Pages affected: [[post-merge-hook]], [[session-end-hook]], [[session-start-hook]], [[format-agent-log]], [[config-schema]], [[agent-id]], [[three-writer-model]], [[runtime-layout]], [[llake-doctor-skill]], [[llake-lady-skill]], [[llake-bootstrap-skill]], [[ingest-v2-pipeline]], [[ingest-v2-orchestrator]], [[apply-ingest-plan]], [[plan-schema]], [[build-ingest-context]], [[frontmatter-parser]], [[hook-log]], [[session-capture-worker]], [[post-merge-lock]], [[claude-p-tools-flag]], [[adr-slug-collisions]], [[planner-plan-json-fragility]], [[adr-plan-apply-split]], [[enable-ingest-v2]]
+
+
+## [2026-09-20] ingest | v2 | b3c9116..0c3b7ea | Document the new ingest batching gate (ingest_gate.py plus post-merge integration, ingest.schedule.* config, and LLAKE_IGNORE_SCHEDULE), the ingest-cursor.sh helpers that move last-ingest-sha and .state/last-ingest-at together, and the watchdog kill_tree fix that stops orphaned sleep processes. Update the post-merge, config, runtime-layout, v2-orchestrator, session-capture-worker, agent-run, and ADR-001 pages to match.
+Pages affected: [[post-merge-hook]], [[config-schema]], [[runtime-layout]], [[ingest-v2-orchestrator]], [[session-capture-worker]], [[agent-run]], [[hooks]], [[lib]], [[gotchas]], [[adr-001-post-merge-trigger]], [[ingest-gate]], [[ingest-cursor]], [[watchdog-sleep-orphans]]
+

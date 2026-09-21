@@ -1,5 +1,5 @@
 ---
-title: "extract_transcript.py"
+title: extract_transcript.py
 description: "JSONL session reader that samples and writes markdown transcripts with sidecar metadata"
 tags: [lib, session-capture, transcript]
 created: 2026-04-23
@@ -7,6 +7,7 @@ updated: 2026-04-23
 status: current
 related:
   - "[[session-end-hook]]"
+  - "[[session-capture-worker]]"
 ---
 
 ## Overview

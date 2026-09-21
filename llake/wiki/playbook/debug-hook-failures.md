@@ -9,6 +9,8 @@ related:
   - "[[agent-run]]"
   - "[[format-agent-log]]"
   - "[[is-llake-agent-guard]]"
+  - "[[hook-log]]"
+  - "[[enable-ingest-v2]]"
 ---
 
 # Debug Hook Failures

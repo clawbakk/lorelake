@@ -1,13 +1,15 @@
 ---
-title: "format-agent-log.py"
+title: format-agent-log.py
 description: "Converts Claude CLI stream-json output to human-readable traces; --extract-result for callers"
 tags: [lib, agent-lifecycle, logging]
 created: 2026-04-23
-updated: 2026-04-23
+updated: 2026-09-20
 status: current
 related:
   - "[[session-end-hook]]"
   - "[[three-writer-model]]"
+  - "[[post-merge-hook]]"
+  - "[[session-capture-worker]]"
 ---
 
 ## Overview
@@ -115,6 +117,42 @@ claude -p "$TRIAGE_PROMPT" \
 classification=$(cat "$TRIAGE_RESULT_FILE" 2>/dev/null || echo "SKIP")
 ```
 
+## Tool results: unwrapping the user envelope
+
+In modern `stream-json` output a tool result does not arrive as a top-level `tool_result` event. It arrives wrapped in a user message:
+
+```json
+{"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "...", "content": "..."}]}}
+```
+
+The formatter's top-level `tool_result` branch was therefore dead code, and **every agent log was missing the entire "what happened" half of every turn** — you could see that the agent called `Edit`, but never whether it succeeded. The formatter now tracks `tool_use_id → tool_name` across assistant events and emits `RESULT` / `ERROR` lines from the user envelope (`hooks/lib/format-agent-log.py:125-159`). An id it never saw an assistant event for renders as `?` rather than crashing.
+
+## Per-tool truncation caps
+
+Caps are fixed in `_RESULT_CAPS` (`hooks/lib/format-agent-log.py:52-60`) — there are no environment variables. They are chosen by how recoverable the content is elsewhere:
+
+| Content | Cap | Why |
+|---|---|---|
+| `Write` content preview | 2000 chars, plus a total-size marker | The written bytes exist nowhere else in the trace |
+| `Edit` `old_string` / `new_string` | 500 each | Both sides are shown so a diff is readable |
+| `Bash` result | 2000 chars | Command output is not reproducible after the fact |
+| `Read` result | 500 chars | File content is recoverable from git |
+
+The point of the asymmetry is audit value per byte: the log should let you reconstruct what an agent *changed* without letting a few large `Read`s bury it.
+
+## Failing loudly on unexpected shapes
+
+Per-event handling moved into `_dispatch_event`, called from a `try`/`except` loop in `main` (`hooks/lib/format-agent-log.py:62`, `hooks/lib/format-agent-log.py:205`). The two cases are deliberately different:
+
+- **`json.JSONDecodeError` is skipped silently.** A malformed line is a legitimate stream artifact and must not take down the run.
+- **Everything else re-raises.** `KeyError`, `AttributeError`, `TypeError` and friends print a diagnostic plus traceback to stderr and exit the formatter nonzero. These indicate a formatter bug or an unannounced schema change, and swallowing them would produce a quietly incomplete audit log.
+
+A nonzero formatter exit has a defined blast radius. `claude` is upstream in the pipe, so it takes SIGPIPE and exits 141; the calling hook records the formatter's exit code in a `formatter-exit` sidecar, logs `failed: formatter crashed`, and **holds the ingest cursor**. The range is retried once the bug is fixed rather than being silently marked done. Both callers redirect the formatter's stdout *and* stderr into `agent.log` (`>> "$AGENT_LOG" 2>&1`) so the traceback is preserved next to the partial trace. See [[post-merge-hook]] and [[session-capture-worker]].
+
+## The removed `--allowed-tools` display filter
+
+The formatter once accepted an `--allowed-tools` flag that filtered which tools it displayed. No caller ever passed it, and it actively misled audits: it could make the log show *fewer* tools than the CLI had actually granted. It was removed, and the log now always reports the full tools list from the CLI's `init` event.
+
 ## Key Points
 
 - `--extract-result` is the mechanism that lets shell scripts read an agent's programmatic output without parsing the full log. Only the triage pass uses it; other passes discard the agent's return value.
@@ -122,6 +160,11 @@ classification=$(cat "$TRIAGE_RESULT_FILE" 2>/dev/null || echo "SKIP")
 - `--allowed-tools` affects only the `INIT` log line display — it does not restrict what tools the agent can actually call. It is used to keep the log readable when the real tool list is long.
 - The script never buffers the full stream — it processes one line at a time and flushes stdout after each event, so `agent.log` grows in near-real-time during agent execution.
 - Malformed JSON lines in the stream are silently discarded, so partial writes from a killed agent do not crash the formatter.
+- Tool results arrive wrapped in a `user` message; the formatter maps `tool_use_id → tool_name` to render them.
+- Truncation caps are per-tool and fixed in `_RESULT_CAPS` — `Write` and `Bash` get 2000 chars, `Edit` 500 per side, `Read` 500.
+- Malformed JSON lines are skipped; any other exception prints a traceback and exits nonzero.
+- A formatter crash SIGPIPEs `claude` (exit 141) and holds the ingest cursor — the failure is never silent.
+- The `--allowed-tools` display filter was removed; logs always show the full granted tool set.
 
 ## Code References
 

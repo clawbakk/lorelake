@@ -3,13 +3,14 @@ title: "Agent Run Library"
 description: "Kill-trap helpers, timeout watchdog, and cleanup for background agent processes"
 tags: [hooks, shell, agents, process-management, timeout]
 created: 2026-04-23
-updated: 2026-04-23
+updated: 2026-09-20
 status: current
 related:
   - "[[agent-id]]"
   - "[[session-end-hook]]"
   - "[[post-merge-hook]]"
   - "[[bash-3-2-portability]]"
+  - "[[watchdog-sleep-orphans]]"
 ---
 
 ## Overview
@@ -54,7 +55,7 @@ kill_tree() {
 }
 ```
 
-Recursively walks a process tree depth-first, sending `SIGTERM` to each node bottom-up. The self-guard (`[ "$root" != "$MY_PID" ]`) prevents the hook from terminating itself before it finishes cleanup. `MY_PID` must be set by the caller before `setup_kill_trap` is called (see "Caller Responsibilities" below).
+Recursively walks a process tree depth-first, sending `SIGTERM` to each node bottom-up. Besides `_agent_cleanup`, hooks call it directly to reap the timeout watchdog when an agent finishes normally. The self-guard (`[ "$root" != "$MY_PID" ]`) prevents the hook from terminating itself before it finishes cleanup. `MY_PID` must be set by the caller before `setup_kill_trap` is called (see "Caller Responsibilities" below).
 
 ### `_agent_cleanup <reason>`
 
@@ -130,7 +131,7 @@ The watchdog pattern looks like this in hook scripts:
 (sleep "$MAX_TIMEOUT_SEC" && kill -USR1 "$$") &
 ```
 
-The subshell sleeps for the configured duration, then sends `USR1` to the hook process. If the agent finishes first, the hook kills the watchdog subshell as part of normal exit.
+The subshell sleeps for the configured duration, then sends `USR1` to the hook process. If the agent finishes first, the caller reaps the watchdog with `kill_tree "$WATCHDOG_PID"` and then `wait`s on it. A plain `kill "$WATCHDOG_PID"` is not enough: it terminates the subshell but orphans its `sleep` child, which then lingers until the full timeout. Every watchdog site in `post-merge.sh` and `session-capture-worker.sh` uses `kill_tree`. See [[watchdog-sleep-orphans]].
 
 ## Bash 3.2 Portability: `MY_PID` and `$$`
 
