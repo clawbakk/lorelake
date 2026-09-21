@@ -84,3 +84,34 @@ def test_v2_planner_model_default(tmp_path):
     rc, out, _ = run([str(user_cfg), "ingest.v2.plannerModel"])
     assert rc == 0
     assert out == "opus"
+
+
+def test_schedule_defaults(user_config):
+    """The three batching-gate knobs resolve through the defaults fallback."""
+    rc, out, _ = run([str(user_config), "ingest.schedule.enabled"])
+    assert rc == 0
+    assert out == "true"
+
+    rc, out, _ = run([str(user_config), "ingest.schedule.minChangedLines"])
+    assert rc == 0
+    assert out == "1500"
+
+    rc, out, _ = run([str(user_config), "ingest.schedule.maxAgeHours"])
+    assert rc == 0
+    assert out == "24"
+
+
+def test_schedule_user_override_is_per_key(tmp_path):
+    """Overriding one schedule key must not shadow its siblings."""
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "ingest": {"schedule": {"minChangedLines": 500}}
+    }))
+
+    rc, out, _ = run([str(cfg), "ingest.schedule.minChangedLines"])
+    assert rc == 0
+    assert out == "500"
+
+    rc, out, _ = run([str(cfg), "ingest.schedule.maxAgeHours"])
+    assert rc == 0
+    assert out == "24"
