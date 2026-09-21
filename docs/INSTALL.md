@@ -87,7 +87,8 @@ even with batching disabled.
 
 Because `post-merge` is the only trigger, `maxAgeHours` is a rate limiter ("at
 most one ingest per 24h"), not a scheduler. A week with no merges produces no
-ingest — there is nothing to ingest.
+ingest — and a pile deferred before the quiet period stays queued, flushing on
+the next merge.
 
 The clock lives in `llake/.state/`, which is gitignored and therefore absent in
 a fresh clone. The hook seeds it with the current time on first run rather than
@@ -96,14 +97,14 @@ an immediate ingest.
 
 Deferrals are logged to `llake/.state/hooks.log`, so you can tune from real data:
 
-````
+```
 2026-09-20 14:22:10 | post-merge    | deferred: lines=412 files=3 age_h=6.1 need_lines=1500 need_age_h=24 (a1b2c3d..e4f5a6b)
-````
+```
 
 **Forcing a run.** To ingest immediately regardless of the thresholds:
 
 ```bash
-LLAKE_IGNORE_SCHEDULE=1 .git/hooks/post-merge
+LLAKE_IGNORE_SCHEDULE=1 "$(git rev-parse --git-common-dir)/hooks/post-merge"
 ```
 
 ## Verification

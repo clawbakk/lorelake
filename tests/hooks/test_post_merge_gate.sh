@@ -67,6 +67,9 @@ run_post_merge() {
 }
 
 # Patch ingest.schedule keys into a project's config.json.
+# maxAgeHours is normally numeric, but a caller (e.g. the fail-open test) may
+# pass a non-numeric string on purpose to make the gate's argparse reject it;
+# in that case it is written verbatim rather than coerced with float().
 set_schedule() {
   local proj="$1" enabled="$2" min_lines="$3" max_age="$4"
   python3 - "$proj/llake/config.json" "$enabled" "$min_lines" "$max_age" <<'PY'
@@ -74,10 +77,14 @@ import json, sys
 path, enabled, min_lines, max_age = sys.argv[1:5]
 with open(path) as f:
     c = json.load(f)
+try:
+    max_age_val = float(max_age)
+except ValueError:
+    max_age_val = max_age
 c.setdefault("ingest", {})["schedule"] = {
     "enabled": enabled == "true",
     "minChangedLines": int(min_lines),
-    "maxAgeHours": float(max_age),
+    "maxAgeHours": max_age_val,
 }
 with open(path, "w") as f:
     json.dump(c, f, indent=2)
@@ -290,6 +297,7 @@ test_v2_success_writes_clock() {
       bash "$REPO_ROOT/hooks/post-merge.sh"
   ) >/dev/null 2>&1
 
+  assert_log_grep "v2-success:v2-ran" "$proj/llake/.state/hooks.log" "spawned v2 agent"
   assert_eq "v2-success:cursor" "$head" "$(cat "$proj/llake/last-ingest-sha")"
   local after_clock; after_clock=$(cat "$proj/llake/.state/last-ingest-at")
   if [ "$after_clock" -gt "$before_clock" ]; then
@@ -297,6 +305,19 @@ test_v2_success_writes_clock() {
   else
     assert_eq "v2-success:clock-advanced" "advanced" "stale (before=$before_clock after=$after_clock)"
   fi
+  rm -rf "$proj"
+}
+
+# --- Test 12: a gate failure must fail OPEN — spawn rather than stall forever ---
+test_gate_error_fails_open() {
+  local proj; proj=$(mkproject "main")
+  set_schedule "$proj" true 100000 "soon"   # non-numeric → argparse exits 2
+  seed_timestamp "$proj" 0
+  add_src_commit "$proj"
+
+  run_post_merge "$proj" >/dev/null 2>&1
+
+  assert_log_grep "gate-error:spawn" "$proj/llake/.state/hooks.log" "spawned agent.*gate: reason=gate-error"
   rm -rf "$proj"
 }
 
@@ -311,6 +332,7 @@ test_missing_clock_seeds_and_defers
 test_v2_empty_pile_skips
 test_v2_defers
 test_v2_success_writes_clock
+test_gate_error_fails_open
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

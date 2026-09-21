@@ -188,7 +188,13 @@ for p in "${INCLUDE_PATHS[@]}"; do
   GATE_INCLUDE_ARGS+=(--include "$p")
 done
 
-GATE_OUT=$(python3 "$LIB_DIR/ingest_gate.py" \
+# Route the gate's stderr through render_err_summary rather than dumping raw
+# Python tracebacks straight into the structured, pipe-delimited hooks.log
+# (hook_start's "started" line has no trailing newline yet, so raw stderr
+# would otherwise glue onto it).
+GATE_STDERR_FILE="$STATE_DIR/gate-stderr.tmp"
+GATE_ERR_SUMMARY=""
+if ! GATE_OUT=$(python3 "$LIB_DIR/ingest_gate.py" \
   --project-root "$PROJECT_ROOT" \
   --last-sha "$LAST_SHA" \
   --current-sha "$CURRENT_SHA" \
@@ -196,10 +202,19 @@ GATE_OUT=$(python3 "$LIB_DIR/ingest_gate.py" \
   --schedule-enabled "$SCHEDULE_ENABLED" \
   --min-changed-lines "$MIN_CHANGED_LINES" \
   --max-age-hours "$MAX_AGE_HOURS" \
-  "${GATE_INCLUDE_ARGS[@]}" 2>>"$LOG_FILE") || GATE_OUT="RUN reason=gate-error"
+  "${GATE_INCLUDE_ARGS[@]}" 2>"$GATE_STDERR_FILE"); then
+  GATE_ERR_SUMMARY=$(render_err_summary "$(cat "$GATE_STDERR_FILE" 2>/dev/null)")
+  GATE_OUT="RUN reason=gate-error"
+fi
+rm -f "$GATE_STDERR_FILE"
 
 GATE_VERDICT="${GATE_OUT%% *}"
 GATE_DETAIL="${GATE_OUT#* }"
+# Used only for log lines — carries the sanitized stderr summary alongside
+# GATE_DETAIL without changing GATE_OUT/GATE_DETAIL's "RUN reason=gate-error"
+# contract that the rest of the script (and tests) rely on.
+GATE_LOG_DETAIL="$GATE_DETAIL"
+[ -n "$GATE_ERR_SUMMARY" ] && GATE_LOG_DETAIL="$GATE_DETAIL err=$GATE_ERR_SUMMARY"
 
 if [ "$GATE_VERDICT" = "EMPTY" ]; then
   advance_ingest_cursor "$CURRENT_SHA"
@@ -256,7 +271,7 @@ if [ "$USE_INGEST_V2" = "1" ]; then
   else
     disown "$BG_PID"
   fi
-  hook_end "done: spawned v2 agent (range: $COMMIT_RANGE, timeout: ${V2_TIMEOUT}s, gate: $GATE_DETAIL)" "$LOG_FILE"
+  hook_end "done: spawned v2 agent (range: $COMMIT_RANGE, timeout: ${V2_TIMEOUT}s, gate: $GATE_LOG_DETAIL)" "$LOG_FILE"
   exit 0
 fi
 
@@ -420,5 +435,5 @@ else
   disown "$BG_PID"
 fi
 
-hook_end "done: spawned agent $AGENT_ID (commits: $COMMIT_RANGE, timeout: ${MAX_TIMEOUT_SEC}s, gate: $GATE_DETAIL)" "$LOG_FILE"
+hook_end "done: spawned agent $AGENT_ID (commits: $COMMIT_RANGE, timeout: ${MAX_TIMEOUT_SEC}s, gate: $GATE_LOG_DETAIL)" "$LOG_FILE"
 exit 0

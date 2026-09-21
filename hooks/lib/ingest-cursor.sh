@@ -8,9 +8,12 @@
 # Usage:
 #   advance_ingest_cursor "$CURRENT_SHA"
 #
-# The two files MUST move together. `last-ingest-sha` is the commit-range
-# cursor; `.state/last-ingest-at` is the clock the batching gate's age arm
-# reads. If they drift, the gate measures age from the wrong moment.
+# The two files are meant to move together via advance_ingest_cursor.
+# `last-ingest-sha` is the commit-range cursor; `.state/last-ingest-at` is
+# the clock the batching gate's age arm reads. If they drift, the gate
+# measures age from the wrong moment. Bootstrap and doctor's repair still
+# write the SHA alone (schema/operations.md, skills/llake-doctor/SKILL.md);
+# both are self-healed by ensure_ingest_clock on the next post-merge.
 #
 # `last-ingest-at` means "the wiki is known-current as of T", which is why an
 # empty-pile skip resets it too — after that skip the wiki genuinely is current.

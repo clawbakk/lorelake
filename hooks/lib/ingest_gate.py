@@ -113,9 +113,12 @@ def main():
     ap.add_argument("--current-sha", required=True)
     ap.add_argument("--include", action="append", default=[])
     ap.add_argument("--state-dir", required=True)
-    ap.add_argument("--schedule-enabled", default="true")
-    ap.add_argument("--min-changed-lines", type=int, default=1500)
-    ap.add_argument("--max-age-hours", type=float, default=24.0)
+    # No defaults here: schedule-enabled/min-changed-lines/max-age-hours must
+    # come from the caller (config.default.json via read-config.py), never
+    # duplicated in this script. See the Config fallback contract in CLAUDE.md.
+    ap.add_argument("--schedule-enabled", required=True)
+    ap.add_argument("--min-changed-lines", type=int, required=True)
+    ap.add_argument("--max-age-hours", type=float, required=True)
     args = ap.parse_args()
 
     enabled = args.schedule_enabled.strip().lower() != "false"
