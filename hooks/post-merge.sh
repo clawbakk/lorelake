@@ -217,8 +217,18 @@ GATE_LOG_DETAIL="$GATE_DETAIL"
 [ -n "$GATE_ERR_SUMMARY" ] && GATE_LOG_DETAIL="$GATE_DETAIL err=$GATE_ERR_SUMMARY"
 
 if [ "$GATE_VERDICT" = "EMPTY" ]; then
-  advance_ingest_cursor "$CURRENT_SHA"
-  hook_end "skipped: no relevant file changes ($COMMIT_RANGE)" "$LOG_FILE"
+  # Take the lock before advancing the cursor: an in-flight agent from a
+  # previous merge may still be working the current range and will write
+  # the cursor back later. Advancing unlocked here could clobber that
+  # write and lose the range. If the lock is busy, hold the cursor so the
+  # next merge retries the (now wider) range instead.
+  if acquire_post_merge_lock; then
+    advance_ingest_cursor "$CURRENT_SHA"
+    release_post_merge_lock
+    hook_end "skipped: no relevant file changes ($COMMIT_RANGE)" "$LOG_FILE"
+  else
+    hook_end "skipped: no relevant file changes, lock held — cursor not advanced ($COMMIT_RANGE)" "$LOG_FILE"
+  fi
   exit 0
 fi
 
@@ -262,7 +272,7 @@ if [ "$USE_INGEST_V2" = "1" ]; then
     ) &
     WATCHDOG_PID=$!
     run_ingest_v2 "$V2_AGENT_ID" "$V2_AGENT_DIR" "$V2_AGENT_LOG"
-    kill "$WATCHDOG_PID" 2>/dev/null
+    kill_tree "$WATCHDOG_PID"
     wait "$WATCHDOG_PID" 2>/dev/null
   ) &
   BG_PID=$!
@@ -382,7 +392,7 @@ rm -f "$RENDER_STDERR_FILE"
   rm -f "$CURRENT_PID_FILE"
 
   # Kill watchdog if agent finished naturally
-  kill "$WATCHDOG_PID" 2>/dev/null
+  kill_tree "$WATCHDOG_PID"
   wait "$WATCHDOG_PID" 2>/dev/null
 
   # Detect a formatter crash before normal dispatch. The sidecar is
