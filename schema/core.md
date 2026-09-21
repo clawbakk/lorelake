@@ -154,7 +154,13 @@ Only the ingest and bootstrap agents may create new categories. Rules:
 - **File names:** lowercase, hyphen-separated. e.g., `tick-loop.md`.
 - **Directories:** lowercase, singular noun. e.g., `architecture/`, `strategy/`.
 - **Tags:** lowercase, hyphen-separated. Category tag first, then specifics.
-- **Decision records:** `adr-NNN-short-title.md` (NNN = zero-padded sequence).
+- **Decision records:** `adr-short-title.md`. Do **not** number them. A
+  sequence number is allocated by reading the local wiki, so two branches or
+  worktrees planning in parallel both see the same highest number and both
+  claim the next one; git merges the results as distinct files with no
+  conflict, leaving several records sharing one number. Chronology lives in
+  the `created:` frontmatter field. Records already numbered keep their
+  names — the rule governs new records only.
 - **Discussion entries:** `YYYY-MM-DD-topic.md`.
 
 ## Index architecture (hierarchical)

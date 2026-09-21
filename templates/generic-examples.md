@@ -18,9 +18,9 @@ Action: update the safety/risk-related page (the control), the pipeline page (th
 
 ### Implementing an existing decision
 Commit: `feat: implement idempotency keys for operation X`
-Diff reveals: implementation matching `decisions/adr-NNN-idempotent-operation-x.md`.
+Diff reveals: implementation matching `decisions/adr-idempotent-operation-x.md`.
 **Semantic value**: the code now reflects a previously-decided design. The decision becomes implemented reality; the implementation needs to point back to the "why."
-Action: update the page describing operation X; add `[[adr-NNN-idempotent-operation-x]]` to its `related:`; update the ADR's `related:` to link back to the implementation page. Do NOT create a new ADR.
+Action: update the page describing operation X; add `[[adr-idempotent-operation-x]]` to its `related:`; update the ADR's `related:` to link back to the implementation page. Do NOT create a new ADR.
 
 ### Refactor with NO new pages
 Commit: `refactor: move ServiceY from src/services/ to src/managers/y/`

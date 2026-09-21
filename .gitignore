@@ -11,3 +11,4 @@ docs/
 !docs/INSTALL.md
 llake/.state/
 .context/
+logs/
