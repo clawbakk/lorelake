@@ -115,7 +115,7 @@ test_lines_arm_spawns() {
 
   run_post_merge "$proj" >/dev/null 2>&1
 
-  assert_log_grep "lines:spawn" "$proj/llake/.state/hooks.log" "spawned agent"
+  assert_log_grep "lines:spawn" "$proj/llake/.state/hooks.log" "spawned agent.*gate: .*reason=lines"
   rm -rf "$proj"
 }
 
@@ -128,7 +128,7 @@ test_age_arm_spawns() {
 
   run_post_merge "$proj" >/dev/null 2>&1
 
-  assert_log_grep "age:spawn" "$proj/llake/.state/hooks.log" "spawned agent"
+  assert_log_grep "age:spawn" "$proj/llake/.state/hooks.log" "spawned agent.*gate: .*reason=age"
   rm -rf "$proj"
 }
 
@@ -136,19 +136,21 @@ test_age_arm_spawns() {
 test_empty_pile_advances_cursor_and_clock() {
   local proj; proj=$(mkproject "main")
   set_schedule "$proj" true 100000 24
-  seed_timestamp "$proj" 0
+  seed_timestamp "$proj" 7200   # 2h ago (well under the 24h age arm) so a write is detectable
   add_nonsrc_commit "$proj"
   local head; head=$(cd "$proj" && git rev-parse HEAD)
+  local before_clock; before_clock=$(cat "$proj/llake/.state/last-ingest-at")
 
   run_post_merge "$proj" >/dev/null 2>&1
 
   assert_log_grep "empty:log" "$proj/llake/.state/hooks.log" "no relevant file changes"
   assert_log_no_grep "empty:no-spawn" "$proj/llake/.state/hooks.log" "spawned agent"
   assert_eq "empty:cursor-advanced" "$head" "$(cat "$proj/llake/last-ingest-sha")"
-  if [ -f "$proj/llake/.state/last-ingest-at" ]; then
-    assert_eq "empty:clock-written" "yes" "yes"
+  local after_clock; after_clock=$(cat "$proj/llake/.state/last-ingest-at" 2>/dev/null || echo 0)
+  if [ "$after_clock" -gt "$before_clock" ]; then
+    assert_eq "empty:clock-written" "advanced" "advanced"
   else
-    assert_eq "empty:clock-written" "yes" "no"
+    assert_eq "empty:clock-written" "advanced" "stale (before=$before_clock after=$after_clock)"
   fi
   rm -rf "$proj"
 }
@@ -175,7 +177,7 @@ test_schedule_disabled_spawns() {
 
   run_post_merge "$proj" >/dev/null 2>&1
 
-  assert_log_grep "disabled:spawn" "$proj/llake/.state/hooks.log" "spawned agent"
+  assert_log_grep "disabled:spawn" "$proj/llake/.state/hooks.log" "spawned agent.*gate: .*reason=schedule-disabled"
   rm -rf "$proj"
 }
 
