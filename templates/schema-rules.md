@@ -51,7 +51,10 @@ doesn't yet exist as a directory). Rules:
 ## Naming conventions
 
 - **Slugs/file names:** lowercase, hyphen-separated. e.g., `tick-loop`.
-- **Decision records:** `adr-NNN-short-title` (NNN = zero-padded sequence).
+- **Decision records:** `adr-short-title`. Never assign a sequence number.
+  You cannot see other branches, so any number you pick may already be taken
+  by a record on a branch that has not merged yet. Existing numbered records
+  keep their slugs; reference them exactly as `wiki-index.json` spells them.
 - **Tags:** lowercase, hyphen-separated. Category tag first, then specifics.
 
 ## Slug uniqueness across nested categories

@@ -931,3 +931,167 @@ def test_apply_update_into_discussions_rejected(tmp_path):
                              llake_root=llake, wiki_root=wiki)
     # File unchanged
     assert page.read_text() == SAMPLE_PAGE
+
+
+# ---------------------------------------------------------------------------
+# Lenient plan parsing (issue: one trailing comma discarded a whole planner run)
+# ---------------------------------------------------------------------------
+
+def test_parse_plan_text_accepts_trailing_comma_before_brace():
+    """Pinned regression: agent warm-falcon-140854-0d06 emitted 68KB of valid
+    JSON with a single trailing comma at line 204 and the whole run was lost."""
+    text = '{"a": {"b": "roughly 517 tests.",\n},\n"c": 1}'
+    assert applier._parse_plan_text(text) == {"a": {"b": "roughly 517 tests."}, "c": 1}
+
+
+def test_parse_plan_text_accepts_trailing_comma_before_bracket():
+    text = '{"ops": [1, 2, 3,\n]}'
+    assert applier._parse_plan_text(text) == {"ops": [1, 2, 3]}
+
+
+def test_parse_plan_text_accepts_multiple_trailing_commas():
+    text = '{"a": [{"x": 1,},{"y": 2,},],}'
+    assert applier._parse_plan_text(text) == {"a": [{"x": 1}, {"y": 2}]}
+
+
+def test_parse_plan_text_does_not_touch_commas_inside_strings():
+    """A comma followed by ] or } INSIDE a string value is content, not syntax.
+    Wiki bodies are markdown and routinely contain both."""
+    text = '{"body": "a list, ] and an object, } inside prose"}'
+    assert applier._parse_plan_text(text) == {
+        "body": "a list, ] and an object, } inside prose"}
+
+
+def test_parse_plan_text_preserves_escaped_quotes_around_comma():
+    text = r'{"body": "he said \", }\" and left", "n": 1}'
+    assert applier._parse_plan_text(text) == {
+        "body": 'he said ", }" and left', "n": 1}
+
+
+def test_parse_plan_text_still_rejects_genuinely_broken_json():
+    with pytest.raises(ValueError):
+        applier._parse_plan_text('{"a": 1 "b": 2}')
+
+
+def test_parse_plan_text_handles_fenced_plan_with_trailing_comma():
+    text = '```json\n{"a": 1,}\n```'
+    assert applier._parse_plan_text(text) == {"a": 1}
+
+
+def test_cli_recovers_from_trailing_comma(tmp_path):
+    """End-to-end: the exact failure mode that held the cursor now applies."""
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "hooks").mkdir(parents=True)
+    _write_log_md(llake)
+    (wiki / "hooks" / "a.md").write_text(SAMPLE_PAGE)
+    plan_obj = {
+        "version": "1", "skip_reason": None, "summary": "comma",
+        "updates": [{"slug": "a", "rationale": "x",
+                     "ops": [{"op": "frontmatter_set", "key": "description", "value": "y"}]}],
+        "creates": [], "deletes": [], "bidirectional_links": [],
+        "log_entry": {"operation": "ingest", "commit_range": "abc..def",
+                      "summary": "comma", "pages_affected": ["a"]}
+    }
+    broken = _json.dumps(plan_obj, indent=1).replace('"y"\n', '"y",\n', 1)
+    assert broken != _json.dumps(plan_obj, indent=1), "fixture did not inject a comma"
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(broken)
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode == 0, f"stderr: {res.stderr}"
+
+
+# ---------------------------------------------------------------------------
+# ADR sequence numbers (issue: parallel worktrees each allocate the same NNN)
+# ---------------------------------------------------------------------------
+
+def _plan_creating(slug, related=None, body="# T\n", links=None):
+    return {
+        "version": "1", "skip_reason": None, "summary": "s",
+        "updates": [], "deletes": [],
+        "creates": [{"slug": slug, "category": "decisions",
+                     "front_matter": {"title": "T", "related": related or []},
+                     "body": body}],
+        "bidirectional_links": links or [],
+        "log_entry": {"operation": "ingest", "commit_range": "a..b",
+                      "summary": "s", "pages_affected": [slug]},
+    }
+
+
+def test_denumber_strips_adr_sequence_from_created_slug():
+    plan = applier._denumber_new_decision_slugs(_plan_creating("adr-012-stop-loss-monitor-inert-seam"))
+    assert plan["creates"][0]["slug"] == "adr-stop-loss-monitor-inert-seam"
+
+
+def test_denumber_rewrites_pages_affected():
+    plan = applier._denumber_new_decision_slugs(_plan_creating("adr-007-keep-activity-stream"))
+    assert plan["log_entry"]["pages_affected"] == ["adr-keep-activity-stream"]
+
+
+def test_denumber_rewrites_wikilinks_in_bodies_and_related():
+    plan = _plan_creating(
+        "adr-012-inert-calculator",
+        related=["[[adr-012-inert-calculator]]", "[[signal-calculator]]"],
+        body="See [[adr-012-inert-calculator]] for the rationale.\n")
+    out = applier._denumber_new_decision_slugs(plan)
+    c = out["creates"][0]
+    assert c["front_matter"]["related"] == ["[[adr-inert-calculator]]", "[[signal-calculator]]"]
+    assert c["body"] == "See [[adr-inert-calculator]] for the rationale.\n"
+
+
+def test_denumber_rewrites_bidirectional_links():
+    plan = _plan_creating("adr-012-inert-calculator",
+                          links=[{"a": "adr-012-inert-calculator", "b": "signal-calculator"}])
+    out = applier._denumber_new_decision_slugs(plan)
+    assert out["bidirectional_links"][0] == {"a": "adr-inert-calculator", "b": "signal-calculator"}
+
+
+def test_denumber_leaves_existing_numbered_pages_alone():
+    """updates[]/deletes[] name pages already on disk — renaming them would
+    break the lookup. Only newly created slugs are de-numbered."""
+    plan = _plan_creating("adr-012-new-one")
+    plan["updates"] = [{"slug": "adr-003-bash-3-2-portability", "rationale": "r",
+                        "ops": [{"op": "frontmatter_set", "key": "description", "value": "d"}]}]
+    plan["deletes"] = [{"slug": "adr-001-post-merge-trigger", "rationale": "r"}]
+    plan["log_entry"]["pages_affected"] = [
+        "adr-012-new-one", "adr-003-bash-3-2-portability", "adr-001-post-merge-trigger"]
+    out = applier._denumber_new_decision_slugs(plan)
+    assert out["updates"][0]["slug"] == "adr-003-bash-3-2-portability"
+    assert out["deletes"][0]["slug"] == "adr-001-post-merge-trigger"
+    assert sorted(out["log_entry"]["pages_affected"]) == sorted(
+        ["adr-new-one", "adr-003-bash-3-2-portability", "adr-001-post-merge-trigger"])
+
+
+def test_denumber_leaves_links_to_existing_numbered_pages_alone():
+    plan = _plan_creating("adr-012-new-one",
+                          body="Supersedes [[adr-003-bash-3-2-portability]].\n")
+    out = applier._denumber_new_decision_slugs(plan)
+    assert out["creates"][0]["body"] == "Supersedes [[adr-003-bash-3-2-portability]].\n"
+
+
+def test_denumber_ignores_non_adr_slugs():
+    plan = _plan_creating("tick-loop-2-phase")
+    out = applier._denumber_new_decision_slugs(plan)
+    assert out["creates"][0]["slug"] == "tick-loop-2-phase"
+
+
+def test_denumber_skips_when_result_would_collide_within_plan():
+    """Two creates that de-number to the same slug: leave both numbered and let
+    the applier's AlreadyExists path surface it rather than silently merging."""
+    plan = _plan_creating("adr-012-alpha")
+    plan["creates"].append({"slug": "adr-013-alpha", "category": "decisions",
+                            "front_matter": {"title": "T2"}, "body": "# T2\n"})
+    plan["log_entry"]["pages_affected"] = ["adr-012-alpha", "adr-013-alpha"]
+    out = applier._denumber_new_decision_slugs(plan)
+    assert [c["slug"] for c in out["creates"]] == ["adr-012-alpha", "adr-013-alpha"]
+
+
+def test_cli_writes_denumbered_adr_page(tmp_path):
+    """End-to-end: two worktrees both plan adr-012; neither writes adr-012."""
+    llake = tmp_path / "llake"; wiki = llake / "wiki"; (wiki / "decisions").mkdir(parents=True)
+    _write_log_md(llake)
+    plan = _plan_creating("adr-012-stop-loss-monitor-inert-seam")
+    plan_path = tmp_path / "plan.json"; plan_path.write_text(_json.dumps(plan))
+    applied = tmp_path / "applied.json"; failed = tmp_path / "failed.json"
+    res = _run_applier(plan_path, wiki, llake, applied, failed)
+    assert res.returncode == 0, f"stderr: {res.stderr}"
+    assert (wiki / "decisions" / "adr-stop-loss-monitor-inert-seam.md").exists()
+    assert not (wiki / "decisions" / "adr-012-stop-loss-monitor-inert-seam.md").exists()
