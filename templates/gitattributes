@@ -1,0 +1,22 @@
+# LoreLake merge rules — installed as <project>/llake/.gitattributes by
+# /llake-lady, repaired by /llake-doctor. Patterns are relative to llake/.
+#
+# These files are append-only: capture and ingest add a row at the end of a
+# category index and an entry at the end of log.md. Two branches — or two
+# worktrees — that both append conflict on every merge and rebase. Git's
+# built-in `union` driver keeps both sides' lines instead of writing conflict
+# markers, which is the correct resolution for rows that are independent of
+# each other.
+#
+# Never add a wiki page to this list. On a page, union would silently keep both
+# versions of prose that two sessions rewrote, instead of reporting a real
+# conflict that a human should resolve.
+#
+# GitHub's pull-request conflict check ignores .gitattributes. When a PR reports
+# a conflict in one of these files, sync the branch locally (rebase onto the
+# ingest branch, or merge it in) and the resolution happens automatically.
+/log.md                           merge=union
+/wiki/discussions/discussions.md  merge=union
+/wiki/decisions/decisions.md      merge=union
+/wiki/gotchas/gotchas.md          merge=union
+/wiki/playbook/playbook.md        merge=union

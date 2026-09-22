@@ -26,6 +26,7 @@ Each phase appends a completion entry to `log.md`. Resumption: read the log tail
 - [ ] Create `{{PROJECT_ROOT}}/llake/last-ingest-sha`:
   - If git repo: write `git -C {{PROJECT_ROOT}} rev-parse HEAD`
   - If not git: write empty file
+- [ ] Copy `{{PLUGIN_PATH}}/templates/gitattributes` verbatim to `{{PROJECT_ROOT}}/llake/.gitattributes` (comments included). These are the `merge=union` rules for `log.md` and the four category indexes — the append-only files that otherwise conflict whenever two branches or worktrees both capture a session.
 - [ ] **Append to `{{PROJECT_ROOT}}/llake/log.md`:**
   ```
   ## [{{DATE}}] install-plan | Phase 1 complete: structure created

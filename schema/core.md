@@ -22,6 +22,7 @@ llake/
 ├── log.md                      # Activity log (append-only)
 ├── config.json                 # Configuration (tracked)
 ├── last-ingest-sha             # Ingest cursor (tracked)
+├── .gitattributes              # merge=union for log.md + category indexes (tracked)
 ├── .state/                     # Runtime working dir (gitignored)
 │   ├── agents/                 # Per-agent log files
 │   ├── sessions/               # Session lock + transcript extraction

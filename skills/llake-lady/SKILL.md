@@ -49,6 +49,7 @@ Verify in order. On any failure, emit a clear message naming the missing prerequ
    - `$PLUGIN_ROOT/templates/config.default.json`
    - `$PLUGIN_ROOT/templates/plan.md.tmpl`
    - `$PLUGIN_ROOT/templates/index.md.tmpl`
+   - `$PLUGIN_ROOT/templates/gitattributes`
 
    If any is missing: "Plugin install appears incomplete (missing `<file>`). Reinstall the plugin."
 
@@ -276,4 +277,5 @@ In **interactive-abort** (the user declined at Phase 6): Phase 8 does not run. T
 - Plan template: `templates/plan.md.tmpl`.
 - Config template: `templates/config.default.json`.
 - Index template: `templates/index.md.tmpl`.
+- Merge rules, copied into the project as `llake/.gitattributes`: `templates/gitattributes`.
 - Sibling skills: `/llake-doctor` (diagnose/repair), `/llake-bootstrap` (populate wiki).
