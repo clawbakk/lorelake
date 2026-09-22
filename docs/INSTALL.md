@@ -70,6 +70,26 @@ Local-path marketplaces are not cached — edits to hook scripts take effect on 
 
 4. From here on, LoreLake runs itself. Sessions end → capture may fire. Merges → ingest may fire.
 
+## Parallel branches and worktrees
+
+`llake/log.md` and the four fixed-category indexes are append-only — every
+capture and every ingest adds a row or an entry at the end. Two branches that
+both captured a session would therefore conflict on every merge and rebase, so
+the installer writes `<project>/llake/.gitattributes` marking exactly those
+files `merge=union`: git keeps both sides' rows instead of writing conflict
+markers. Wiki pages are deliberately left out — a conflict inside a page is a
+real one, and you want to see it.
+
+Two notes:
+
+- **Installed before this existed?** Run `/llake-doctor`; it adds the rules.
+  Branches that were created before the file landed still conflict once when you
+  merge the ingest branch into them. Rebasing them instead picks the rules up and
+  resolves automatically.
+- **GitHub pull requests ignore `.gitattributes`.** A PR can still report a
+  conflict in these files. Sync the branch locally (`git pull --rebase`), which
+  now resolves on its own, then push.
+
 ## Tuning ingest frequency
 
 Ingest is expensive — each run spawns a Claude agent. By default it does **not**

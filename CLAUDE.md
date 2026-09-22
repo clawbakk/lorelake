@@ -75,6 +75,7 @@ Session capture is **two-pass by design**: a cheap triage agent (short prompt, `
   index.md               # category catalog (root of the wiki)
   log.md                 # append-only activity log
   last-ingest-sha        # cursor for post-merge ingest
+  .gitattributes         # merge=union for log.md + category indexes (from templates/gitattributes)
   wiki/<category>/*.md   # pages (fixed categories + project-specific)
   .state/                # gitignored runtime working dir
     hooks.log            # rolled hook audit log

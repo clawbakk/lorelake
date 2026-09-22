@@ -71,6 +71,14 @@ Record one issue per missing path. If `config.json` exists but fails `json.loads
 
 Read `<project>/.gitignore` if it exists. The line `llake/.state/` must be present on its own line (trailing slash matters — it scopes the ignore to the directory). If the file is missing entirely or the line is absent, record an issue. Do not touch any other line — the user owns the rest of the file.
 
+### Check 2.5 — `llake/.gitattributes` merge rules
+
+`llake/log.md` and the fixed-category indexes are append-only — capture and ingest add entries and rows at their end. Two branches or worktrees that both append conflict on every merge and rebase unless those paths carry git's built-in `union` driver. `$PLUGIN_ROOT/templates/gitattributes` is the source of truth for those rules; the install plan copies it to `<project>/llake/.gitattributes`.
+
+Read `<project>/llake/.gitattributes`. Every non-comment, non-blank line of the plugin's template must be present. Compare the whitespace-separated fields (`<pattern> merge=union`), not the raw line — the alignment whitespace is cosmetic. Record one issue naming the missing rules, or the missing file.
+
+Ignore any line that is not in the template: the user owns the rest of the file, including rules for their own paths.
+
 ### Check 3 — Git post-merge hook
 
 Only run this check if `<project>/.git/` exists. If the project is not yet a git repo, record a **warning** (not an issue) explaining that the post-merge ingest hook will be wired the next time doctor runs after `git init` — this is an expected intermediate state, not drift.
@@ -184,6 +192,14 @@ Substitute the category name (title-cased for `title`, lowercase for `tags`) and
 
 If `<project>/.gitignore` is missing, create it containing the single line `llake/.state/`. If it exists without the line, append the line on a new line (ensure the file ends with a newline first to avoid concatenating onto an existing entry). Do not reorder or edit any other line.
 
+### Fix — Write `llake/.gitattributes` merge rules
+
+If `<project>/llake/.gitattributes` is missing, copy `$PLUGIN_ROOT/templates/gitattributes` verbatim, comments included — they record why the rules exist and why wiki pages must never be added to them.
+
+If the file exists but is missing rules, ensure it ends with a newline, then append only the missing rule lines. Do not reorder, rewrite, or delete anything already in the file. Like the `.gitignore` fix, this one is additive.
+
+This is how an install that predates the merge rules picks them up — doctor is the upgrade path, so the user never has to reinstall.
+
 ### Fix — Wire or repair the git post-merge hook
 
 Skip entirely if `<project>/.git/` does not exist.
@@ -269,6 +285,7 @@ Plugin:  /absolute/path/to/plugin
 
 [CHECK] LoreLake structure         : OK
 [CHECK] .gitignore                 : MISSING ENTRY
+[CHECK] llake/.gitattributes       : MISSING FILE
 [CHECK] Post-merge hook            : NOT WIRED (git repo present)
 [CHECK] Plugin manifest            : OK
 [CHECK] Stale manual entries       : NONE
@@ -277,15 +294,20 @@ Plugin:  /absolute/path/to/plugin
 [CHECK] Orphaned install plan      : OK
 
 [FIX] Appending llake/.state/ to .gitignore           : DONE
+[FIX] Writing llake/.gitattributes merge rules        : DONE
 [FIX] Wiring .git/hooks/post-merge                    : DONE
 [FIX] Merging missing keys: ingest.exclude, foo.bar   : DONE
 
-Summary: 3 issues, 3 fixed. LoreLake is healthy.
+Summary: 4 issues, 4 fixed. LoreLake is healthy.
 ```
 
 Rules for the report:
 
 - One `[CHECK]` line per check, in the order of Phase 1 (1 through 7, but collapse Check 1 into a single structure line unless there are many missing paths — in which case list them on sub-lines).
+- `[CHECK] llake/.gitattributes` possible values:
+  - `OK` — every rule from `$PLUGIN_ROOT/templates/gitattributes` is present.
+  - `MISSING FILE` — no `llake/.gitattributes`; the template was copied in.
+  - `N RULES MISSING` — the file exists but lacks rules; only those were appended.
 - `[CHECK] Post-merge hook` possible values:
   - `OK` — our shim (plain or chain) is in place and executable.
   - `NOT WIRED (git repo present)` — no hook file, fixed by this run.
@@ -316,6 +338,7 @@ The report is the whole user-visible output. Do not narrate intermediate steps, 
 - Project-root detection contract: `hooks/lib/detect-project-root.sh`.
 - Config defaults (source of truth for schema version and forward-merge): `templates/config.default.json`.
 - Install plan template (Phase 4 of which invokes this skill): `templates/plan.md.tmpl`.
+- Merge rules copied into the project as `llake/.gitattributes`: `templates/gitattributes`.
 - Root index template (used when `index.md` is missing): `templates/index.md.tmpl`.
 - Page-format rules (frontmatter, category stubs): `schema/core.md`.
 - Sibling skills: `/llake-lady` (initial install), `/llake-bootstrap` (populate wiki).
