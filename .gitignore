@@ -7,8 +7,9 @@ __pycache__/
 venv/
 .DS_Store
 .claude/
-docs/
+docs/*
 !docs/INSTALL.md
+!docs/research/
 llake/.state/
 .context/
 logs/
