@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["pages"],
+  "properties": {
+    "pages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["page", "accuracy", "residual"],
+        "properties": {
+          "page": {"type": "string"},
+          "accuracy": {"$ref": "#/$defs/findings"},
+          "residual": {"$ref": "#/$defs/findings"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["quote", "head", "severity"],
+        "properties": {
+          "quote": {"type": "string"},
+          "head": {"type": "string"},
+          "severity": {"type": "string", "enum": ["major", "minor"]}
+        }
+      }
+    }
+  }
+}
