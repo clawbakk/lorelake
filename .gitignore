@@ -10,6 +10,7 @@ venv/
 docs/*
 !docs/INSTALL.md
 !docs/research/
+!docs/benchmark/
 llake/.state/
 .context/
 logs/
