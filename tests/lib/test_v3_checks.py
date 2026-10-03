@@ -132,10 +132,33 @@ def test_concurrent_change_is_reported_not_reverted(proj):
     assert json.loads(open(state.dir + "/checks.write.json").read())["concurrent"] == res["concurrent"]
 
 
+BROKEN = "---\ntitle: [unclosed\n---\nbody\n"
+
+
 def test_unrestorable_frontmatter_revert_is_recorded_not_assumed(proj):
     repo, state = proj
-    written(repo, state, "wiki/arch/client.md", "---\ntitle: [unclosed\n---\nbody\n")
+    written(repo, state, "wiki/arch/client.md", BROKEN)
     (repo / "llake/.state/agents/run/bundles/b01/snapshot/manifest.json").unlink()
     res = checks.run_checks(state, brief("wiki/arch/client.md", quote="zzz"), "write")
     st = state.pages["wiki/arch/client.md"]
-    assert res["reverted"] == [] and st["unrestored"] is True and st["outcome"] == "corrected"
+    assert res["reverted"] == [] and res["unrestored"] == ["wiki/arch/client.md"]
+    assert st["outcome"] == "reverted" and st["unrestored"] is True and st["changed"] is True
+    assert state.ledger["unrestored"] == [{"stage": "checks-write", "page": "wiki/arch/client.md"}]
+    assert (repo / "llake/wiki/arch/client.md").read_text() == BROKEN
+
+
+def test_unrestorable_fix_pass_break_is_recorded(proj):
+    repo, state = proj
+    written(repo, state, "wiki/arch/client.md", page_text("Client", "client", "Post-write text."))
+    fix_snap = state.dir + "/bundles/b01/fix-snapshot"
+    snapshots.snapshot(state, ["wiki/arch/client.md"], fix_snap)
+    snapshots.settle(state, ["wiki/arch/client.md"])
+    state.pages["wiki/arch/client.md"]["fixSnap"] = fix_snap
+    write(repo, "llake/wiki/arch/client.md", BROKEN)
+    (repo / "llake/.state/agents/run/bundles/b01/fix-snapshot/manifest.json").unlink()
+    res = checks.run_checks(state, brief("wiki/arch/client.md", quote="zzz"), "fix")
+    st = state.pages["wiki/arch/client.md"]
+    assert res["reverted"] == [] and res["unrestored"] == ["wiki/arch/client.md"]
+    assert st["outcome"] == "reverted" and st["unrestored"] is True
+    assert state.ledger["unrestored"] == [{"stage": "checks-fix", "page": "wiki/arch/client.md"}]
+    assert (repo / "llake/wiki/arch/client.md").read_text() == BROKEN

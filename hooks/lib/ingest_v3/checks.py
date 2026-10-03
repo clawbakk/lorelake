@@ -81,7 +81,7 @@ def run_checks(state, brief, pass_name, src=None):
     by_page = {p["page"]: p for p in brief["pages"]}
     names = (load_json(os.path.join(state.dir, "inputs", "names.json"), {}) or {}).get("removed", [])
     src = src or Source(state.project)
-    res = {"flags": {}, "unlinked": {}, "reverted": [], "status_mismatch": [], "concurrent": concurrent_changes(state)}
+    res = {"flags": {}, "unlinked": {}, "reverted": [], "unrestored": [], "status_mismatch": [], "concurrent": concurrent_changes(state)}
     valid = {slug(p) for p in wiki_pages(state.llake)} | {slug(p["page"]) for p in brief["pages"] if p.get("create")}
     for p, st in sorted(state.pages.items()):
         if st.get("outcome") not in CLAIM_OUTCOMES:
@@ -99,22 +99,22 @@ def run_checks(state, brief, pass_name, src=None):
                                    for c in entry.get("claims", []) if c.get("quoteFound")]
             continue
         if not fm_ok(text) and (not before or fm_ok(before)):
-            if st.get("fixSnap"):
-                if snapshots.restore_page(state, p, st["fixSnap"]) == "unrestored":
-                    st["unrestored"] = True
-                    st["history"].append("fixer broke the frontmatter: could not restore the post-write state")
-                else:
-                    st["history"].append("fixer broke the frontmatter: reverted to the post-write state")
+            fix = bool(st.get("fixSnap"))
+            outcome = snapshots.restore_page(state, p, st["fixSnap"] if fix else snap)
+            if outcome == "unrestored":
+                st["outcome"], st["unrestored"] = "reverted", True
+                st["history"].append("frontmatter invalid after {}: could not restore".format("fix" if fix else "write"))
+                state.ledger.setdefault("unrestored", []).append({"stage": "checks-" + pass_name, "page": p})
+                res["unrestored"].append(p)
+                continue
+            if fix:
+                st["history"].append("fixer broke the frontmatter: reverted to the post-write state")
                 text = read_text(state.abs(p))
             else:
-                if snapshots.restore_page(state, p, snap) == "unrestored":
-                    st["unrestored"] = True
-                    st["history"].append("frontmatter invalid after write: could not restore")
-                else:
-                    st["outcome"], st["changed"] = "reverted", False
-                    st["history"].append("frontmatter invalid after write: reverted")
-                    res["reverted"].append(p)
-                    continue
+                st["outcome"], st["changed"] = "reverted", False
+                st["history"].append("frontmatter invalid after write: reverted")
+                res["reverted"].append(p)
+                continue
         fixed, removed = unlink(text, before, valid)
         if removed:
             write_text(state.abs(p), fixed)
