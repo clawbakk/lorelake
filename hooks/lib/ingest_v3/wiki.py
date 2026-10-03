@@ -27,7 +27,7 @@ def norm_page(path):
         p = "wiki/" + p
     if not p.endswith(".md"):
         p += ".md"
-    if ".." in p.split("/"):
+    if ".." in p.split("/") or set("*?[]{}") & set(p):
         return None
     return p if PAGE_RE.match(p) else None
 

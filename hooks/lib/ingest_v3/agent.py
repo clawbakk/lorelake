@@ -15,13 +15,20 @@ import subprocess
 import time
 
 INFRA_RE = re.compile(
-    r"rate.?limit|usage limit|limit reached|overloaded|\b(?:429|529)\b|authenticat|unauthori[sz]ed|"
+    r"rate.?limit|API Error: 5\d\d|internal server error|credit balance|usage limit|limit reached|overloaded|\b(?:429|529)\b|authenticat|unauthori[sz]ed|"
     r"invalid api key|oauth|network|ECONN|ETIMEDOUT|ENOTFOUND|socket hang up|fetch failed|"
     r"connection (?:error|refused|reset)", re.I)
 WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 
 
+ALLOWED_TOOLS = frozenset(("Read", "Glob", "Grep", "Edit", "Write"))
+GLOB_CHARS = frozenset("*?[]{}")
+
+
 def build_argv(model, effort, budget, tools, allowed, json_schema=None, system_file=None):
+    bad = [t for t in str(tools).split(",") if t.strip() not in ALLOWED_TOOLS]
+    if bad:
+        raise ValueError("tools outside the v3 allowlist: {}".format(",".join(bad)))
     argv = ["claude", "-p", "--model", str(model), "--effort", str(effort), "--max-budget-usd", str(budget),
             "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence",
             "--exclude-dynamic-system-prompt-sections", "--permission-mode", "dontAsk",
@@ -34,7 +41,10 @@ def build_argv(model, effort, budget, tools, allowed, json_schema=None, system_f
 
 
 def allow_rule(path):
-    return "Edit(/" + os.path.abspath(path) + ")"
+    p = os.path.abspath(path)
+    if GLOB_CHARS & set(p) or os.path.isdir(p):
+        raise ValueError("not a single-file path: {}".format(p))
+    return "Edit(/" + p + ")"
 
 
 def clip_timeout(stage_timeout, deadline, now=None):
@@ -99,7 +109,7 @@ def summarize(stream_path, exit_code, killed=None):
         cls, reason = ("infra", killed) if killed == "infra-stop" else ("work", killed)
     elif r and not r.get("is_error") and r.get("subtype", "success") == "success":
         cls, reason = "none", "success"
-    elif r and (INFRA_RE.search(text) or "rejected" in statuses):
+    elif r and r.get("is_error") and (INFRA_RE.search(text) or "rejected" in statuses or not assistants):
         cls, reason = "infra", "{}: {}".format(r.get("subtype"), text[:200])
     elif r:
         cls, reason = "work", "{}: {}".format(r.get("subtype"), text[:200])

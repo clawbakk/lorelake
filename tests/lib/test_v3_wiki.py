@@ -97,3 +97,8 @@ def test_atomic_io_roundtrip_preserves_crlf(tmp_path):
 
 def test_norm_ws():
     assert common.norm_ws("  a \n b\t c ") == "a b c"
+
+
+def test_norm_page_rejects_glob_metacharacters():
+    for bad in ("wiki/arch/*.md", "wiki/arch/a?.md", "wiki/arch/[a].md", "wiki/arch/{a,b}.md"):
+        assert wiki.norm_page(bad) is None

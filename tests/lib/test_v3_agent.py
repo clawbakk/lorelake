@@ -49,6 +49,13 @@ def stream(tmp_path, *events):
     ([INIT, assistant()], "timeout", "work"),
     ([INIT, assistant()], "infra-stop", "infra"),
     ([INIT, assistant(), result(subtype="success", is_error=False)], "timeout", "work"),
+    ([INIT, result(subtype="error_during_execution", is_error=True, result="x")], None, "infra"),
+    ([INIT, result(subtype="success", is_error=True, result="API Error: 500 Internal server error")], None, "infra"),
+    ([INIT, result(subtype="success", is_error=True, result="Credit balance is too low")], None, "infra"),
+    ([INIT, assistant(), result(subtype="success", is_error=True, result="API Error: 500 Internal server error")],
+     None, "infra"),
+    ([INIT, assistant(), result(subtype="error_during_execution", is_error=True, result="bad structured output")],
+     None, "work"),
 ])
 def test_classification(tmp_path, events, killed, cls):
     assert agent.summarize(stream(tmp_path, *events), 1, killed)["class"] == cls
@@ -161,3 +168,17 @@ def test_missing_binary_is_infra(tmp_path):
     s = agent.Agent("analysis", argv, "p", str(tmp_path), str(tmp_path / "stages"), 5, "5m").start().wait(
         sleep=lambda _: None)
     assert s["class"] == "infra"
+
+
+def test_allow_rule_rejects_globs_and_directories(tmp_path):
+    for bad in ("*.md", "a?.md", "a[1].md", "a{b,c}.md"):
+        with pytest.raises(ValueError):
+            agent.allow_rule(str(tmp_path / "wiki" / bad))
+    with pytest.raises(ValueError):
+        agent.allow_rule(str(tmp_path))
+
+
+def test_build_argv_rejects_non_allowlisted_tools():
+    with pytest.raises(ValueError):
+        agent.build_argv("sonnet", "medium", 1, "Read,Bash", "Read")
+    agent.build_argv("sonnet", "medium", 1, "Read,Glob,Grep,Edit,Write", "Read")
