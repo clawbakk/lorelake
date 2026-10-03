@@ -1,6 +1,6 @@
 # Ingest quality bar
 
-The pass/fail bar every candidate ingest design must clear on a benchmark fixture, and the fixture format it is scored against. Among candidates that clear the bar on every fixture, the cheapest wins.
+The bar that defines a fully up-to-date ingest run on a benchmark fixture, and the fixture format it is scored against. Candidates are placed on a cost–quality curve by their quality score (the weighted share of verified stale claims resolved, major ×3, minor ×1). This bar is the curve's reference line. The design is chosen at the knee: the point past which more cost buys no justified quality gain. A candidate with a confirmed factual error cannot be the knee.
 
 This is a developer tool for choosing between ingest designs. It is not shipped to projects that install LoreLake. Terms in **bold** are defined in [`CONTEXT.md`](../../CONTEXT.md).
 
@@ -13,7 +13,7 @@ Ingest describes what the change means for the project's state. It does not summ
 ## Pass rule and cost
 
 - A candidate runs **twice** on each fixture. **Both runs must clear every check below**; one failed check fails the run, and one failed run fails the candidate on that fixture.
-- **Cost** is the mean CLI-reported cost of the two runs, with the prompt-cache TTL at 5 minutes. It is the single number candidates are compared on.
+- **Cost** is the mean CLI-reported cost of the two runs, with the prompt-cache TTL at 5 minutes. It is the cost axis of the cost–quality curve.
 - Wall clock and plan-usage movement (the stream's `rate_limit_event` utilization before and after) are recorded next to cost but not scored. A run that hits the ingest timeout fails.
 
 ## Page tiers
@@ -60,6 +60,8 @@ After the run, for every category index:
 - the page count is right;
 - the category blurb is still true of the category. *(harness for the first three, reviewer for the blurb)*
 
+Only problems the run introduced count. Base wikis carry preexisting index drift, and a run is not failed for drift it did not cause.
+
 Every page the run changed has its `updated:` date set to the run date. *(harness)*
 
 ### 5. Accuracy floor
@@ -68,7 +70,7 @@ Only text the run wrote (lines its diff added) is scored; errors in text it left
 
 An **error** is a statement presented as current that is false at the range head: a wrong symbol, behavior, default, count or flow, or a `path:line` anchor whose line (±2) does not hold the named symbol. A historical statement is an error only if the history is false.
 
-- Every anchor in added lines is checked. *(harness)*
+- Every anchor in added lines is checked. *(harness flags; the reviewer confirms a flag before it counts as an error, since the ±2-line match is heuristic)*
 - At least 5 behavioral claims per must-correct page and 2 per other touched page are checked against source at the range head, chosen from sections that touch a change theme. *(reviewer)*
 
 **One confirmed error fails the run.**
