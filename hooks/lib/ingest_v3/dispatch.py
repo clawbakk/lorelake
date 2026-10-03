@@ -6,6 +6,8 @@ Prefix warm-up: the first writer runs alone until its first turn, so the shared 
 A work failure reverts the bundle and retries each page alone once; a second failure is `writer-failed`.
 An infra failure stops dispatch: in-flight bundles are killed and reverted, the rest become `infra`.
 A page whose snapshot cannot be restored is left as written, recorded as `unrestored` and never retried.
+An exception out of the pool (a bug, or the run's kill signal) kills every running agent and reverts its
+bundle before it propagates: no agent outlives the pool and keeps writing.
 Every finished agent's summary (with its cost) goes to the ledger's per-stage record and to `spent`.
 """
 import json
@@ -13,7 +15,7 @@ import os
 import time
 
 from . import snapshots
-from .agent import Agent, allow_rule, build_argv, clip_timeout
+from .agent import ABORT_GRACE, Agent, allow_rule, build_argv, clip_timeout
 from .anchors import Source
 from .common import load_json, write_text
 from .prompts import bundle_prompt, shared_prefix, verifier_prompt
@@ -44,49 +46,75 @@ def statuses(summary, schema_name):
 def pool(state, cfg, jobs, deadline, start, on_done, on_skip, clock=time.time, sleep=time.sleep):
     cap, conc = float(cfg.get("maxRunBudgetUsd")), max(1, int(cfg.get("writerConcurrency")))
     queue, running, done, stop, warm = list(jobs), [], [], None, False
-    while queue or running:
-        if stop is None and clock() > deadline:
-            stop = "timeout"
-        if stop:
-            for _job, ag in running:
-                ag.kill("infra-stop" if stop == "infra" else "timeout")
-        for job, ag in list(running):
-            if ag.poll():
-                running.remove((job, ag))
-                done.append(job)
-                s = ag.summary()
-                state.record_stage(s, job["kind"])
-                if on_done(job, s, stop, queue) == "infra" and stop is None:
-                    stop = "infra"
-                state.save()
-        if stop:
-            while queue:
-                on_skip(queue.pop(0), stop)
-            if not running:
-                break
-            sleep(0.25)
-            continue
-        while queue and len(running) < conc:
-            job = queue[0]
-            if job["kind"] in ("writer", "fixer") and not warm:
-                writers = [a for j, a in running if j["kind"] in ("writer", "fixer")]
-                if any(a.first_turn_done() for a in writers) or any(j["kind"] in ("writer", "fixer") for j in done):
-                    warm = True
-                elif writers:
+    try:
+        while queue or running:
+            if stop is None and clock() > deadline:
+                stop = "timeout"
+            if stop:
+                for _job, ag in running:
+                    ag.kill("infra-stop" if stop == "infra" else "timeout")
+            for job, ag in list(running):
+                if ag.poll():
+                    running.remove((job, ag))
+                    done.append(job)
+                    s = ag.summary()
+                    state.record_stage(s, job["kind"])
+                    if on_done(job, s, stop, queue) == "infra" and stop is None:
+                        stop = "infra"
+                    state.save()
+            if stop:
+                while queue:
+                    on_skip(queue.pop(0), stop)
+                if not running:
                     break
-            reserved = sum(budget_of(cfg, j) for j, _ in running)
-            if state.spent + reserved + budget_of(cfg, job) > cap:
-                if running:
-                    break
-                on_skip(queue.pop(0), "run-cap")
+                sleep(0.25)
                 continue
-            queue.pop(0)
-            running.append((job, start(job)))
-        state.save()
-        if queue or running:
-            sleep(0.25)
+            while queue and len(running) < conc:
+                job = queue[0]
+                if job["kind"] in ("writer", "fixer") and not warm:
+                    writers = [a for j, a in running if j["kind"] in ("writer", "fixer")]
+                    if any(a.first_turn_done() for a in writers) or any(j["kind"] in ("writer", "fixer") for j in done):
+                        warm = True
+                    elif writers:
+                        break
+                reserved = sum(budget_of(cfg, j) for j, _ in running)
+                if state.spent + reserved + budget_of(cfg, job) > cap:
+                    if running:
+                        break
+                    on_skip(queue.pop(0), "run-cap")
+                    continue
+                queue.pop(0)
+                running.append((job, start(job)))
+            state.save()
+            if queue or running:
+                sleep(0.25)
+    except BaseException:
+        _abort(state, running)
+        raise
     state.save()
     return stop
+
+
+def _abort(state, running):
+    """Kill every running agent first (no agent keeps writing while others are reverted), then revert each
+    writer/fixer bundle from its snapshot and record what the agent cost. Best effort per agent: the
+    original exception propagates either way, and the kill revert covers anything left in flight."""
+    for _job, ag in running:
+        try:
+            ag.kill("aborted", grace=ABORT_GRACE)
+        except Exception:
+            pass
+    for job, ag in running:
+        try:
+            if job["kind"] in ("writer", "fixer"):
+                revert_job(state, job)
+            state.record_stage(ag.summary(), job["kind"])
+        except Exception:
+            pass
+    try:
+        state.save()
+    except Exception:
+        pass
 
 
 class WriterContext:

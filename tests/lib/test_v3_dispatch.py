@@ -46,7 +46,7 @@ class FakeAgent:
             FakeAgent.running -= 1
         return self.done
 
-    def kill(self, why):
+    def kill(self, why, grace=None):
         self.killed = why
 
     def first_turn_done(self):
@@ -373,3 +373,53 @@ def test_default_spawn_starts_one_agent_per_job(proj, monkeypatch):
     stage, argv, prompt, cwd, out_dir, timeout, ttl, agent_id = made[0]
     assert (stage, cwd, out_dir, ttl, agent_id) == ("writer-b01", state.project, os.path.join(state.dir, "stages"),
                                                      "5m", "run_writer-b01")
+
+
+def _one_page_jobs(state, pairs):
+    return [{"kind": "writer", "stage": "writer-" + b, "bundle": b, "pages": [p], "retry": False,
+             "snap": state.dir + "/bundles/" + b + "/snapshot"} for b, p in pairs]
+
+
+def _half_writing_spawn(repo, agents, quick=()):
+    """Each agent edits its page as soon as it starts; the `quick` stages finish on their first poll."""
+    def spawn(job):
+        write(repo, "llake/" + job["pages"][0], "half-written by {}\n".format(job["stage"]))
+        a = FakeAgent(job, polls=1 if job["stage"] in quick else 10 ** 6)
+        agents.append(a)
+        return a
+    return spawn
+
+
+def test_exception_in_on_done_kills_running_agents_and_reverts_their_bundles(proj):
+    repo, state = proj
+    agents = []
+
+    def on_done(job, s, stop, queue):
+        raise RuntimeError("boom in on_done")
+    jobs3 = _one_page_jobs(state, [("b01", "wiki/arch/x.md"), ("b02", "wiki/arch/y.md"), ("b03", "wiki/arch/z.md")])
+    with pytest.raises(RuntimeError):
+        dispatch.pool(state, cfg(), jobs3, 1e12, dispatch.with_snapshot(state, _half_writing_spawn(
+            repo, agents, quick=("writer-b01",))), on_done, lambda *a: None, sleep=lambda _: None)
+    assert [a.killed for a in agents] == [None, "aborted", "aborted"]
+    assert "old y" in (repo / "llake/wiki/arch/y.md").read_text()
+    assert "old z" in (repo / "llake/wiki/arch/z.md").read_text()
+    # b01 finished before the exception: its page stays in flight for the kill revert / recovery.
+    assert list(RunState(repo, state.dir).journal["inFlight"]) == ["wiki/arch/x.md"]
+
+
+def test_exception_in_start_kills_running_agents_and_reverts_their_bundles(proj):
+    repo, state = proj
+    agents = []
+    spawn = _half_writing_spawn(repo, agents)
+
+    def start(job):
+        if job["stage"] == "writer-b03":
+            raise RuntimeError("boom in start")
+        return dispatch.with_snapshot(state, spawn)(job)
+    jobs3 = _one_page_jobs(state, [("b01", "wiki/arch/x.md"), ("b02", "wiki/arch/y.md"), ("b03", "wiki/arch/z.md")])
+    with pytest.raises(RuntimeError):
+        dispatch.pool(state, cfg(), jobs3, 1e12, start, lambda *a: None, lambda *a: None, sleep=lambda _: None)
+    assert [a.killed for a in agents] == ["aborted", "aborted"]
+    assert "old x" in (repo / "llake/wiki/arch/x.md").read_text()
+    assert "old y" in (repo / "llake/wiki/arch/y.md").read_text()
+    assert RunState(repo, state.dir).journal["inFlight"] == {}

@@ -12,7 +12,8 @@
   verifier-*  returns empty findings.
 Switches (comma-separated stage names): V3_STUB_FAIL (budget error: work), V3_STUB_INFRA (usage limit:
 infra). V3_STUB_SLEEP=<stage>:<seconds> sleeps after editing, touching V3_STUB_MARK first;
-V3_STUB_IGNORE_TERM=1 ignores SIGTERM meanwhile and exits once its parent is gone. V3_STUB_COST per call (0.05).
+V3_STUB_IGNORE_TERM=1 ignores SIGTERM meanwhile and exits once its parent is gone; V3_STUB_STAY=1 keeps
+sleeping after its parent is gone (an orphan); V3_STUB_PIDFILE gets the sleeper's pid. V3_STUB_COST per call (0.05).
 V3_STUB_OTHER_STALE: JSON list for writers' otherStale. V3_STUB_LOG: file to append each stage name to.
 """
 import json
@@ -69,6 +70,9 @@ def maybe_sleep():
     name, secs = spec.rsplit(":", 1)
     if name != stage:
         return
+    if os.environ.get("V3_STUB_PIDFILE"):
+        with open(os.environ["V3_STUB_PIDFILE"], "w") as fh:
+            fh.write(str(os.getpid()))
     if os.environ.get("V3_STUB_MARK"):
         with open(os.environ["V3_STUB_MARK"], "w") as fh:
             fh.write(stage)
@@ -76,7 +80,7 @@ def maybe_sleep():
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
     end = time.time() + float(secs)
     while time.time() < end:
-        if os.getppid() != parent:
+        if os.getppid() != parent and not os.environ.get("V3_STUB_STAY"):
             sys.exit(1)
         time.sleep(0.2)
 

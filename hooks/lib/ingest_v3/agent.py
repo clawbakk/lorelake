@@ -23,6 +23,32 @@ WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 
 ALLOWED_TOOLS = frozenset(("Read", "Glob", "Grep", "Edit", "Write"))
 GLOB_CHARS = frozenset("*?[]{}")
+ABORT_GRACE = 2  # seconds an aborted agent gets after SIGTERM before SIGKILL
+
+# Every started, unfinished agent. Agents run in their own session, so once the run process is gone no tree
+# kill reaches them: an aborting run kills them itself (kill_live). A kill signal that lands while a spawn is
+# between fork and registration is deferred until the agent is registered (defer_signal).
+_LIVE = set()
+_SPAWN = {"busy": False, "deferred": []}
+
+
+def defer_signal(signum):
+    """For the run's kill handler: True (signal held for re-delivery) while a spawn is mid-flight."""
+    if _SPAWN["busy"]:
+        _SPAWN["deferred"].append(signum)
+        return True
+    return False
+
+
+def kill_live(why, grace=ABORT_GRACE):
+    """Kill every live agent (its whole process group); returns how many were still running."""
+    n = 0
+    for a in list(_LIVE):
+        if a.proc is not None and a.proc.poll() is None:
+            n += 1
+        a.kill(why, grace)
+        _LIVE.discard(a)
+    return n
 
 
 def build_argv(model, effort, budget, tools, allowed, json_schema=None, system_file=None):
@@ -146,15 +172,21 @@ class Agent:
         self._out = open(self.stream, "w", encoding="utf-8")
         self._err = open(self.stream + ".err", "w", encoding="utf-8")
         self.t0 = time.time()
+        _SPAWN["busy"] = True
         try:
             self.proc = subprocess.Popen(self.argv, cwd=self.cwd, env=env, stdin=subprocess.PIPE,
                                          stdout=self._out, stderr=self._err, start_new_session=True,
                                          universal_newlines=True)
+            _LIVE.add(self)
         except OSError as exc:
             self._err.write("spawn failed: {}\n".format(exc))
             self._err.flush()
             self._exit = 127
             return self
+        finally:
+            _SPAWN["busy"] = False
+            while _SPAWN["deferred"]:
+                os.kill(os.getpid(), _SPAWN["deferred"].pop(0))
         try:
             self.proc.stdin.write(self.prompt)
             self.proc.stdin.close()
@@ -172,11 +204,11 @@ class Agent:
             return True
         return False
 
-    def kill(self, why):
+    def kill(self, why, grace=10):
         if self.proc is None or self.proc.poll() is not None:
             return
         self.killed = why
-        for sig, grace in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+        for sig, grace in ((signal.SIGTERM, grace), (signal.SIGKILL, 5)):
             try:
                 os.killpg(self.proc.pid, sig)
             except (ProcessLookupError, PermissionError):
@@ -204,6 +236,7 @@ class Agent:
         code = self._exit
         if self.proc is not None:
             code = self.proc.wait()
+        _LIVE.discard(self)
         self._out.close()
         self._err.close()
         s = summarize(self.stream, code, self.killed)

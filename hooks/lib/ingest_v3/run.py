@@ -7,14 +7,19 @@ bundles → writers → checks → fix round → checks → finalize → report.
 Benchmark-only environment hooks (spec §13), never config: LLAKE_V3_FROZEN_BRIEF=<earlier agent dir>
 copies that run's brief/ and skips the analysis spawn; LLAKE_V3_STOP_AFTER=<stage> stops after
 analysis | recall | brief | bundle | write | fix with the cursor held.
+
+Kill signals (SIGTERM, SIGHUP, SIGINT) raise Killed wherever the run is: the pool kills and reverts its
+running bundles on the way out, then the run kills any other live agent (analysis, recall) and reverts its
+own writes (snapshots.revert_run, idempotent with the bash trap's revert-run that follows), cursor held.
 """
 import os
 import shutil
+import signal
 import time
 import traceback
 
 from . import names, plan, snapshots, stage
-from .agent import GLOB_CHARS, build_argv, clip_timeout
+from .agent import GLOB_CHARS, build_argv, clip_timeout, defer_signal, kill_live
 from .brief import InvalidBrief, assemble
 from .bundle import make_bundles
 from .checks import run_checks
@@ -34,6 +39,66 @@ NO_CHANGE_THEME = {"id": "T0", "title": "no watched changes up to the split midp
 
 class HoldRun(Exception):
     """The run stops before finalize; the cursor holds."""
+
+
+class Killed(BaseException):
+    """A kill signal reached the run. A BaseException, so no `except Exception` on the way swallows it."""
+
+    def __init__(self, signum):
+        BaseException.__init__(self, signum)
+        self.signum = signum
+
+    @property
+    def name(self):
+        try:
+            return signal.Signals(self.signum).name
+        except ValueError:
+            return str(self.signum)
+
+
+KILL_SIGNALS = ("SIGTERM", "SIGHUP", "SIGINT")
+
+
+def _install_kill_handlers():
+    """Raise Killed on the first kill signal (later ones are ignored while the run cleans up). Returns the
+    previous handlers; nothing is installed off the main thread."""
+    fired = []
+
+    def handler(signum, _frame):
+        if fired or defer_signal(signum):
+            return
+        fired.append(signum)
+        raise Killed(signum)
+    prev = {}
+    for name in KILL_SIGNALS:
+        sig = getattr(signal, name)
+        try:
+            prev[sig] = signal.signal(sig, handler)
+        except (ValueError, OSError):
+            pass
+    return prev
+
+
+def _on_killed(project, agent_dir, exc):
+    """Stop every agent still alive, then undo the run's writes under llake/. Exit 0 only when the kill came
+    after finalize (the run stands); otherwise 1, cursor held."""
+    n = kill_live("killed")
+    os.makedirs(agent_dir, exist_ok=True)
+    log = _AgentLog(os.path.join(agent_dir, "agent.log"))
+    try:
+        res = snapshots.revert_run(project, agent_dir)
+    except Exception:
+        log.line("killed by {}: {} agent(s) stopped; revert failed, cursor held (the kill trap's revert-run "
+                 "or the next run's recovery retries it):\n{}".format(exc.name, n, traceback.format_exc()))
+        return 1
+    if res.get("reason") == "run already finalized":
+        log.line("killed by {} after finalize: the run stands".format(exc.name))
+        return 0
+    log.line("killed by {}: {} agent(s) stopped, run reverted ({}), cursor held".format(
+        exc.name, n, "restored {}, unrestored {}".format(len(res.get("restored") or []),
+                                                         len(res.get("unrestored") or []))
+        if not res.get("skipped") else res.get("reason")))
+    return 1
 
 
 class _AgentLog:
@@ -176,6 +241,17 @@ def _log_unrecovered(llake, agent_dir, log):
 
 
 def run(project_root, agent_id, agent_dir, deadline, environ=None, today=None, clock=time.time):
+    prev = _install_kill_handlers()
+    try:
+        return _run(project_root, agent_id, agent_dir, deadline, environ, today, clock)
+    except Killed as exc:
+        return _on_killed(os.path.abspath(str(project_root)), os.path.abspath(str(agent_dir)), exc)
+    finally:
+        for sig, handler in prev.items():
+            signal.signal(sig, handler)
+
+
+def _run(project_root, agent_id, agent_dir, deadline, environ, today, clock):
     env = os.environ if environ is None else environ
     project = os.path.abspath(str(project_root))
     llake = os.path.join(project, "llake")

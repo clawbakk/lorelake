@@ -19,7 +19,8 @@ BRIEF = json.dumps([{"path": "llake/wiki/arch/client.md", "kind": "direct", "sev
                                                              "severity": "major"}]}])
 STUB_VARS = ("V3_STUB_BRIEF", "V3_STUB_RECALL", "V3_STUB_FAIL", "V3_STUB_INFRA", "V3_STUB_SLEEP", "V3_STUB_MARK",
              "V3_STUB_IGNORE_TERM", "V3_STUB_DECLARE", "V3_STUB_COST", "V3_STUB_OTHER_STALE",
-             "V3_STUB_RECALL_CLOBBER", "V3_STUB_RECALL_EXTRA", "LLAKE_V3_STOP_AFTER", "LLAKE_V3_FROZEN_BRIEF")
+             "V3_STUB_RECALL_CLOBBER", "V3_STUB_RECALL_EXTRA", "V3_STUB_STAY", "V3_STUB_PIDFILE",
+             "LLAKE_V3_STOP_AFTER", "LLAKE_V3_FROZEN_BRIEF")
 
 
 @pytest.fixture
@@ -411,3 +412,55 @@ def test_recall_file_not_named_recall_is_set_aside(tmp_path, stages, monkeypatch
     assert (repo / "llake/.state/agents/run-1/brief/rejected-recall/extra.json").exists()
     assert not (repo / "llake/.state/agents/run-1/brief/pages/extra.json").exists()
     assert "recall file extra.json set aside (not named recall-*)" in agent_log(repo)
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+@pytest.mark.parametrize("sig,stage", [("SIGTERM", "writer-b01"), ("SIGHUP", "writer-b01"),
+                                       ("SIGINT", "writer-b01"), ("SIGTERM", "analysis")])
+def test_signal_to_a_running_run_kills_its_agents_and_reverts(tmp_path, stages, monkeypatch, sig, stage):
+    """A kill signal to ingest-v3.py run (no bash trap involved) must leave no agent behind (they run in
+    their own session, out of reach of a tree kill once the run is gone) and restore the run's pages."""
+    import signal as _signal
+    repo, base, _ = project(tmp_path)
+    mark, pidfile = tmp_path / "mark", tmp_path / "stub.pid"
+    monkeypatch.setenv("V3_STUB_BRIEF", BRIEF)
+    monkeypatch.setenv("V3_STUB_SLEEP", stage + ":60")
+    monkeypatch.setenv("V3_STUB_MARK", str(mark))
+    monkeypatch.setenv("V3_STUB_PIDFILE", str(pidfile))
+    monkeypatch.setenv("V3_STUB_STAY", "1")
+    agent_dir = repo / "llake/.state/agents/run-1"
+    proc = subprocess.Popen([sys.executable, str(REPO_ROOT / "hooks/lib/ingest-v3.py"), "run", "--project-root",
+                             str(repo), "--agent-id", "run-1", "--agent-dir", str(agent_dir),
+                             "--deadline", str(time.time() + 600)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    stub = None
+    try:
+        t0 = time.time()
+        while not (mark.exists() and pidfile.exists() and pidfile.read_text().strip()) and time.time() - t0 < 30:
+            time.sleep(0.1)
+        assert mark.exists(), "the stub never reached its sleep"
+        stub = int(pidfile.read_text())
+        proc.send_signal(getattr(_signal, sig))
+        assert proc.wait(timeout=60) != 0
+        t1 = time.time()
+        while _alive(stub) and time.time() - t1 < 3:
+            time.sleep(0.1)
+        assert not _alive(stub), "an agent survived its run"
+        assert CLIENT in (repo / "llake/wiki/arch/client.md").read_text()
+        assert cursor(repo) == base
+        assert RunState(repo, str(agent_dir)).journal["aborted"] is True
+        assert "killed by" in (agent_dir / "agent.log").read_text()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        if stub is not None and _alive(stub):
+            os.kill(stub, _signal.SIGKILL)

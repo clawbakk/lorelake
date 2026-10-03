@@ -182,3 +182,32 @@ def test_build_argv_rejects_non_allowlisted_tools():
     with pytest.raises(ValueError):
         agent.build_argv("sonnet", "medium", 1, "Read,Bash", "Read")
     agent.build_argv("sonnet", "medium", 1, "Read,Glob,Grep,Edit,Write", "Read")
+
+
+def test_kill_signal_during_a_spawn_is_held_until_the_agent_is_registered(fake_claude, monkeypatch):
+    """A kill landing between fork and registration must not orphan the new agent: the run's handler
+    defers it, and it is re-delivered once the agent is in the live set kill_live walks."""
+    import signal
+    from ingest_v3 import run as run_mod
+    monkeypatch.setenv("FAKE_SLEEP", "30")
+    real_popen = agent.subprocess.Popen
+
+    def popen_then_signal(*a, **k):
+        proc = real_popen(*a, **k)
+        os.kill(os.getpid(), signal.SIGTERM)  # handler runs here, before Agent.start registers proc
+        return proc
+    monkeypatch.setattr(agent.subprocess, "Popen", popen_then_signal)
+    prev = run_mod._install_kill_handlers()
+    a = agent.Agent("writer-b09", agent.build_argv("sonnet", "medium", 1, "Read", "Read"), "p",
+                    str(fake_claude), str(fake_claude / "stages"), 60, "5m")
+    try:
+        with pytest.raises(run_mod.Killed):
+            a.start()
+        assert a in agent._LIVE
+        assert agent.kill_live("killed") == 1
+        assert a.proc.poll() is not None and a not in agent._LIVE
+    finally:
+        for sig, h in prev.items():
+            signal.signal(sig, h)
+        if a.proc is not None and a.proc.poll() is None:
+            a.proc.kill()

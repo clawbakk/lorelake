@@ -13,11 +13,15 @@
 # catches a hung process. Env override exists for tests.
 LLAKE_V3_WATCHDOG_GRACE_SECONDS="${LLAKE_V3_WATCHDOG_GRACE_SECONDS:-300}"
 
+# On a kill the Python run gets this long after its own SIGTERM to stop its agents and revert before the
+# tree kill. Its agents run in their own session: once Python is gone, a tree kill can no longer find them.
+LLAKE_V3_KILL_GRACE_SECONDS="${LLAKE_V3_KILL_GRACE_SECONDS:-20}"
+
 # Run one v3 ingest. Python runs in the background and we `wait`, so a TERM/INT/USR1 trap fires at
 # once instead of after the Python process exits.
 run_ingest_v3() {
   local agent_id="$1" agent_dir="$2" agent_log="$3" timeout_sec="$4"
-  local deadline py_pid
+  local deadline
   deadline=$(( $(date +%s) + timeout_sec ))
   {
     echo "=== LoreLake Ingest v3 Agent: $agent_id ==="
@@ -29,8 +33,8 @@ run_ingest_v3() {
   IS_LLAKE_AGENT=true LLAKE_AGENT_ID="$agent_id" \
     python3 "$LIB_DIR/ingest-v3.py" run --project-root "$PROJECT_ROOT" --agent-id "$agent_id" \
       --agent-dir "$agent_dir" --deadline "$deadline" >> "$agent_log" 2>&1 &
-  py_pid=$!
-  wait "$py_pid"
+  V3_PY_PID=$!
+  wait "$V3_PY_PID"
 }
 
 # The post-merge lock under v3. acquire_post_merge_lock records `$$`, which inside the `( … ) &` run
@@ -50,16 +54,25 @@ release_v3_lock() {
   fi
 }
 
-# Kill trap (TERM/INT = user, USR1 = watchdog): stop every process of this run, undo its writes under
-# llake/ (never outside it), release the run's post-merge lock (_agent_cleanup clears the EXIT trap that
+# Kill trap (TERM/INT = user, USR1 = watchdog): SIGTERM the Python run first and give it
+# LLAKE_V3_KILL_GRACE_SECONDS to kill its agents and revert (it raises on the signal), then stop every
+# process left in this run's tree, undo its writes under llake/ (never outside it; a no-op when Python
+# already reverted), release the run's post-merge lock (_agent_cleanup clears the EXIT trap that
 # would), then log the kill and exit 143. A failing revert-run is logged and never stops the trap:
 # the lock is released and _agent_cleanup runs regardless (the next run's recovery retries the revert).
 # `set +e` first: kill_tree and pkill return non-zero in normal use, which would end the trap early
 # if a caller ever ran with errexit on (the subshell exits at the end of this trap anyway).
 _ingest_v3_on_kill() {
   set +e
-  local reason="$1" revert_exit=0
+  local reason="$1" revert_exit=0 ticks=0
   trap '' TERM INT USR1
+  if [ -n "${V3_PY_PID:-}" ] && kill -0 "$V3_PY_PID" 2>/dev/null; then
+    kill -TERM "$V3_PY_PID" 2>/dev/null
+    while kill -0 "$V3_PY_PID" 2>/dev/null && [ "$ticks" -lt $((LLAKE_V3_KILL_GRACE_SECONDS * 5)) ]; do
+      sleep 0.2
+      ticks=$((ticks + 1))
+    done
+  fi
   kill_tree "$MY_PID"
   sleep 1
   pkill -KILL -P "$MY_PID" 2>/dev/null
