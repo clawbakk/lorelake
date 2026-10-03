@@ -323,15 +323,17 @@ if [ "$USE_INGEST_V3" = "1" ]; then
     CURRENT_PID_FILE="$V3_PID_FILE"
     MAX_TIMEOUT_SEC="$V3_WATCHDOG"
     LLAKE_AGENT_ID="$V3_AGENT_ID"
+    # Kill traps first: a TERM between taking the lock and arming them would strand the lock for the
+    # stale reclaim. Before the lock is ours the trap's release_v3_lock is a no-op (ownership check).
+    trap '_ingest_v3_on_kill user' TERM INT
+    trap '_ingest_v3_on_kill timeout' USR1
     if ! acquire_post_merge_lock; then
       printf "%s | %-13s | skipped: post-merge lock held; v3 agent abandoned\n" \
         "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" >> "$LOG_FILE"
       exit 0
     fi
-    claim_v3_lock
     trap 'release_v3_lock' EXIT
-    trap '_ingest_v3_on_kill user' TERM INT
-    trap '_ingest_v3_on_kill timeout' USR1
+    claim_v3_lock
     (
       sleep "$V3_WATCHDOG"
       if kill -0 "$MY_PID" 2>/dev/null; then kill -USR1 "$MY_PID" 2>/dev/null; fi

@@ -259,6 +259,42 @@ test_v3_watchdog_reverts_and_holds() {
   assert_eq "watchdog_cursor_held" "$before" "$(cursor "$proj")"
 }
 
+# A TERM right after acquire_post_merge_lock (owner.pid still the hook's $$, not yet the run subshell)
+# must still release the lock; a lock another process owns is never removed.
+test_v3_release_covers_the_acquire_to_claim_gap() {
+  local dir; dir=$(mktemp -d -t llake-v3-lock.XXXXXX); TMP_PROJECTS+=("$dir")
+  (
+    STATE_DIR="$dir"; LOG_FILE="$dir/hooks.log"; HOOK_NAME="post-merge"
+    source "$REPO_ROOT/hooks/lib/post-merge-lock.sh"
+    source "$REPO_ROOT/hooks/lib/ingest-v3.sh"
+    MY_PID=$(sh -c 'echo $PPID')
+    acquire_post_merge_lock
+    release_v3_lock
+  )
+  assert_eq "gap_release_removes_own_lock" "no" "$([ -d "$dir/post-merge.lock.d" ] && echo yes || echo no)"
+  mkdir -p "$dir/post-merge.lock.d"
+  echo 1 > "$dir/post-merge.lock.d/owner.pid"
+  (
+    STATE_DIR="$dir"; LOG_FILE="$dir/hooks.log"; HOOK_NAME="post-merge"
+    source "$REPO_ROOT/hooks/lib/post-merge-lock.sh"
+    source "$REPO_ROOT/hooks/lib/ingest-v3.sh"
+    MY_PID=$(sh -c 'echo $PPID')
+    release_v3_lock
+  )
+  assert_eq "gap_release_keeps_foreign_lock" "yes" "$([ -d "$dir/post-merge.lock.d" ] && echo yes || echo no)"
+}
+
+# The v3 kill traps are installed before the lock is taken (as v2's EXIT release is armed right after),
+# so no TERM between taking the lock and arming the traps can strand it for the stale-lock reclaim.
+test_v3_kill_traps_armed_before_the_lock() {
+  local block trap_line lock_line
+  block=$(awk '/^if \[ "\$USE_INGEST_V3" = "1" \]; then/,/^fi$/' "$REPO_ROOT/hooks/post-merge.sh")
+  trap_line=$(printf '%s\n' "$block" | grep -n "trap '_ingest_v3_on_kill user' TERM INT" | head -1 | cut -d: -f1)
+  lock_line=$(printf '%s\n' "$block" | grep -n "acquire_post_merge_lock" | head -1 | cut -d: -f1)
+  assert_eq "v3_block_found" "yes" "$([ -n "$trap_line" ] && [ -n "$lock_line" ] && echo yes || echo no)"
+  assert_eq "v3_traps_before_lock" "yes" "$([ "${trap_line:-0}" -lt "${lock_line:-0}" ] && echo yes || echo no)"
+}
+
 test_v3_range_run
 test_v3_empty_with_owed_major_runs_gap_only
 test_v3_empty_without_owed_advances_without_agent
@@ -269,6 +305,8 @@ test_v3_lock_held_abandons
 test_v3_user_kill_reverts_and_holds
 test_v3_watchdog_reverts_and_holds
 test_v3_live_lock_not_reclaimed_when_aged
+test_v3_release_covers_the_acquire_to_claim_gap
+test_v3_kill_traps_armed_before_the_lock
 
 echo "PASS=$PASS FAIL=$FAIL"
 if [ "$FAIL" -gt 0 ]; then

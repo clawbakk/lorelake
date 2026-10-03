@@ -41,15 +41,19 @@ run_ingest_v3() {
 # subshell is the hook's PID — and the hook exits at once, so the lock would name a dead owner and turn
 # reclaimable as stale an hour in, while the run (deadline up to ingest.v3.timeoutSeconds + grace) is
 # still working. claim_v3_lock re-records the owner as the run subshell itself ($MY_PID), live for the
-# whole run; release_v3_lock removes the lock only while that owner still holds it.
+# whole run; release_v3_lock removes the lock only while this run holds it: owner $MY_PID, or the hook's
+# $$ that acquire_post_merge_lock wrote just before claim_v3_lock (a kill can land in between). $$ names
+# this hook invocation only; any other holder's lock is left alone.
 claim_v3_lock() {
   echo "$MY_PID" > "$(_llake_lock_dir)/owner.pid"
 }
 
 release_v3_lock() {
-  local lockdir
+  local lockdir owner
   lockdir=$(_llake_lock_dir)
-  if [ -f "$lockdir/owner.pid" ] && [ "$(cat "$lockdir/owner.pid" 2>/dev/null)" = "$MY_PID" ]; then
+  [ -f "$lockdir/owner.pid" ] || return 0
+  owner=$(cat "$lockdir/owner.pid" 2>/dev/null)
+  if [ -n "$owner" ] && { [ "$owner" = "$MY_PID" ] || [ "$owner" = "$$" ]; }; then
     rm -rf "$lockdir"
   fi
 }
