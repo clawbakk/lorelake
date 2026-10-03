@@ -3,7 +3,7 @@ title: "Runtime Layout"
 description: "The llake/ directory structure in a target project and what each file does"
 tags: [architecture, layout, runtime, filesystem]
 created: 2026-04-23
-updated: 2026-09-20
+updated: 2026-09-22
 status: current
 related:
   - "[[plugin-project-duality]]"
@@ -15,6 +15,7 @@ related:
   - "[[post-merge-lock]]"
   - "[[ingest-gate]]"
   - "[[ingest-cursor]]"
+  - "[[append-only-merge-conflicts]]"
 ---
 
 ## Overview
@@ -31,6 +32,7 @@ Every project where LoreLake is installed gets a single `llake/` directory at th
   index.md                 # wiki category catalog (root of the wiki)
   log.md                   # append-only activity log (hooks + agent completions)
   last-ingest-sha          # SHA cursor for post-merge ingest
+  .gitattributes           # merge=union rules for log.md + fixed-category indexes (committed)
   wiki/
     decisions/             # architectural and design decisions
     gotchas/               # non-obvious behaviors, traps, and known issues
@@ -128,6 +130,20 @@ Then run `/llake-doctor` to verify.
 
 ---
 
+### `.gitattributes`
+
+**Who writes it:** The install plan's Phase 1 executor, which copies the plugin's `templates/gitattributes` verbatim (comments included). `/llake-doctor` Check 2.5 repairs it additively: it creates the file if it is missing, and otherwise appends only the missing rules. Users may add their own rules. Doctor ignores any line that isn't in the template.
+
+**Who reads it:** git, during merge, rebase, and cherry-pick. No LoreLake hook or agent reads it.
+
+**Purpose:** Marks the five append-only files (`log.md` and the four fixed-category indexes `wiki/{discussions,decisions,gotchas,playbook}/<cat>.md`) with `merge=union`. When two branches or worktrees both appended a row or log entry, git keeps both sides' lines instead of reporting a conflict. Patterns are relative to `llake/`. Wiki pages are deliberately excluded because union on a page would silently merge two rewrites of the same prose. See [[append-only-merge-conflicts]].
+
+**What breaks if missing:** Nothing at runtime. But every merge or rebase between branches that both captured a session conflicts on `log.md` and on the touched category index (the frontmatter `updated:` line and the appended rows).
+
+**Recovery:** Run `/llake-doctor`.
+
+---
+
 ### `wiki/<category>/*.md`
 
 **Who writes it:** Bootstrap, ingest, and capture, each within their write-surface rules (see [[three-writer-model]]).
@@ -209,7 +225,7 @@ The project's `.gitignore` (or `llake/.gitignore`) should ignore the `.state/` d
 llake/.state/
 ```
 
-`/llake-lady` sets this up during install. The user-visible files (`config.json`, `index.md`, `log.md`, `last-ingest-sha`, `wiki/**`) should be committed.
+`/llake-lady` sets this up during install. The user-visible files (`config.json`, `index.md`, `log.md`, `last-ingest-sha`, `.gitattributes`, `wiki/**`) should be committed. `.gitattributes` must be committed so teammates and other worktrees get the union merge rules too.
 
 ---
 
@@ -266,6 +282,7 @@ Separately, `apply_ingest_plan.py` writes wiki pages through a sibling tempfile 
 - A v2 run leaves its full audit trail in `.state/agents/<id>/`: `context/`, `plan.json`, `applied.json`, `failed.json`.
 - Renderer stderr is co-located in the agent directory rather than `/tmp`.
 - Agent and session directories are intentionally not cleaned up after a kill; deleting old ones by hand is safe.
+- `llake/.gitattributes` is committed and marks `log.md` plus the four fixed-category indexes `merge=union`, so parallel appends don't conflict. It is installed by plan Phase 1 and repaired by `/llake-doctor` Check 2.5. See [[append-only-merge-conflicts]].
 
 ## Code References
 
@@ -277,6 +294,8 @@ Separately, `apply_ingest_plan.py` writes wiki pages through a sibling tempfile 
 - `hooks/lib/extract_transcript.py` — writes `transcript.md` + `.turns`/`.words` sidecars
 - `hooks/lib/agent-run.sh` — PID file management and kill-trap
 - `hooks/lib/format-agent-log.py` — converts stream-json to `agent.log` content
+- `templates/gitattributes` — source of `llake/.gitattributes` (the five `merge=union` rules)
+- `schema/core.md:25` — `.gitattributes` in the spec's directory tree
 
 ---
 
@@ -287,3 +306,4 @@ Separately, `apply_ingest_plan.py` writes wiki pages through a sibling tempfile 
 - [[config-schema]] — all configuration keys and their defaults
 - [[post-merge-hook]] — how `last-ingest-sha` is used in the ingest flow
 - [[session-end-hook]] — full session capture flow including session directory lifecycle
+- [[append-only-merge-conflicts]] — why `log.md` and the category indexes need `merge=union`

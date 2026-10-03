@@ -3,7 +3,7 @@ title: "/llake-lady — Install Wizard"
 description: "Sets up llake/ in a project, wires the post-merge hook, and runs doctor to verify"
 tags: [skills, install, setup]
 created: 2026-04-23
-updated: 2026-09-20
+updated: 2026-09-22
 status: current
 related:
   - "[[llake-doctor-skill]]"
@@ -11,6 +11,7 @@ related:
   - "[[plugin-project-duality]]"
   - "[[runtime-layout]]"
   - "[[config-schema]]"
+  - "[[append-only-merge-conflicts]]"
 ---
 
 # /llake-lady — Install Wizard
@@ -39,7 +40,7 @@ Before invoking, confirm:
 1. **You are in the project root.** The skill uses `pwd` as the project root. A wrong working directory produces a wrong install path. The skill echoes both resolved paths before Phase 1 — check them.
 2. **The project looks like a real project root.** At least one of `.git/`, `CLAUDE.md`, or a common manifest (`package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `pom.xml`, `build.gradle`) must be present.
 3. **Git is initialized (soft requirement).** A non-git project is allowed — the skill emits a warning and continues, but the post-merge ingest hook will not be wired until you run `git init` followed by `/llake-doctor`.
-4. **Plugin templates are intact.** `templates/config.default.json`, `templates/plan.md.tmpl`, and `templates/index.md.tmpl` must be readable from the plugin root. If any is missing, reinstall the plugin.
+4. **Plugin templates are intact.** `templates/config.default.json`, `templates/plan.md.tmpl`, `templates/index.md.tmpl`, and `templates/gitattributes` must be readable from the plugin root. If any is missing, reinstall the plugin.
 5. **No existing `llake/` directory.** The skill stops if one is found.
 
 ---
@@ -81,6 +82,7 @@ Spawns an executor subagent (`Agent` tool, `general-purpose`) with a self-contai
 - Checks idempotently before each step — safe to re-run after an interrupt.
 - Creates the full `llake/` directory tree.
 - Appends `llake/.state/` to `.gitignore`.
+- Copies `templates/gitattributes` verbatim (comments included) to `llake/.gitattributes` in plan Phase 1. These are the `merge=union` rules for `log.md` and the four category indexes. See [[append-only-merge-conflicts]].
 - Writes and `chmod +x`s `.git/hooks/post-merge` with a shim that calls the plugin's `hooks/post-merge.sh`.
 - Invokes `/llake-doctor` as Phase 4 of the plan to verify the install.
 - Appends a phase-complete log line to `llake/log.md` after each plan phase.
@@ -101,6 +103,7 @@ Reports the install plan path, config path, log path, the doctor report, and the
 | `<project>/llake/index.md` | Category catalog (populated by bootstrap) |
 | `<project>/llake/log.md` | Append-only activity log |
 | `<project>/llake/last-ingest-sha` | Ingest cursor (empty until bootstrap runs) |
+| `<project>/llake/.gitattributes` | `merge=union` rules for `log.md` and the fixed-category indexes, copied from `templates/gitattributes` (committed) |
 | `<project>/llake/wiki/discussions/`, `decisions/`, `gotchas/`, `playbook/` | Four fixed-category stub indexes |
 | `<project>/llake/.state/agents/`, `.state/sessions/` | Runtime working dirs (gitignored) |
 | `<project>/.git/hooks/post-merge` | Shim that calls `<plugin>/hooks/post-merge.sh` |
@@ -180,6 +183,7 @@ The completion summary explicitly recommends opening a **new** Claude Code sessi
 - Phase 3.5 prompts for `ingest.branch` and `ingest.include` in both modes; auto mode no longer assumes `src/`.
 - The install plan lives at `llake/.state/install-plan.md` (gitignored) and is deleted after Phase 4.
 - Phase 8 recommends a fresh Claude Code session before `/llake-bootstrap`.
+- The install plan's Phase 1 installs `llake/.gitattributes` from `templates/gitattributes`, so parallel branches and worktrees don't conflict on `log.md` or the category indexes.
 
 ## Code References
 
@@ -187,6 +191,7 @@ The completion summary explicitly recommends opening a **new** Claude Code sessi
 - `templates/plan.md.tmpl` — install plan template with placeholder definitions
 - `templates/config.default.json` — canonical config defaults and `_comment` annotations
 - `templates/index.md.tmpl` — `llake/index.md` template used by the executor
+- `templates/gitattributes` — merge rules copied into the project as `llake/.gitattributes` (checked for readability at `skills/llake-lady/SKILL.md:52`; copied at `templates/plan.md.tmpl:29`)
 - `hooks/post-merge.sh` — the hook the executor shim calls
 - `hooks/lib/detect-project-root.sh` — project root detection contract
 
@@ -199,3 +204,4 @@ The completion summary explicitly recommends opening a **new** Claude Code sessi
 - [[plugin-project-duality]] — what the plugin root vs. the project's `llake/` contain
 - [[runtime-layout]] — full directory tree created at install
 - [[post-merge-hook]] — what the wired hook does after each merge
+- [[append-only-merge-conflicts]] — the merge rules the install copies into `llake/.gitattributes`

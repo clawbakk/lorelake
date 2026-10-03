@@ -3,7 +3,7 @@ title: "/llake-doctor — Diagnose and Repair"
 description: "Idempotent health checker that diagnoses and repairs LoreLake install drift"
 tags: [skills, maintenance, repair]
 created: 2026-04-23
-updated: 2026-09-20
+updated: 2026-09-22
 status: current
 related:
   - "[[llake-lady-skill]]"
@@ -12,6 +12,7 @@ related:
   - "[[runtime-layout]]"
   - "[[config-schema]]"
   - "[[enable-ingest-v2]]"
+  - "[[append-only-merge-conflicts]]"
 ---
 
 # /llake-doctor — Diagnose and Repair
@@ -31,6 +32,7 @@ The most common triggers are a fresh clone (where `.git/hooks/` is empty), a plu
 | Fresh clone of a project that already has `llake/` | Yes — rewires the post-merge hook |
 | After `git init` on a non-git project | Yes — wires the post-merge hook that was deferred at install |
 | After a plugin upgrade | Yes — forward-merges any new config keys |
+| Install predates the `llake/.gitattributes` merge rules | Yes — Check 2.5 adds them without a reinstall |
 | After manual edits to `llake/` structure | Yes — finds and repairs structural drift |
 | At the end of `/llake-lady` install | Automatic — Phase 4 of the install plan |
 | No `llake/` directory exists at all | No — use `/llake-lady` instead |
@@ -60,6 +62,11 @@ An invalid `config.json` (present but not parseable JSON) is a distinct issue �
 
 ### Check 2 — `.gitignore` entry
 Confirms `llake/.state/` appears on its own line in `<project>/.gitignore`. The trailing slash matters (it scopes the ignore to the directory). Only this line is touched; the rest of the file is untouched.
+
+### Check 2.5 — `llake/.gitattributes` merge rules
+Reads `<project>/llake/.gitattributes` and confirms that every non-comment, non-blank line of the plugin's `templates/gitattributes` is present. The template is the source of truth, and the install plan copies it at install time. The comparison uses whitespace-separated fields (`<pattern> merge=union`), not raw lines. The column alignment is cosmetic, so a re-aligned file still passes. Doctor records one issue naming the missing rules, or the missing file. Lines that aren't in the template belong to the user and are ignored, including rules for their own paths.
+
+These rules exist because `log.md` and the fixed-category indexes are append-only. Without git's `union` driver, two branches or worktrees that both append conflict on every merge and rebase. See [[append-only-merge-conflicts]].
 
 ### Check 3 — Git post-merge hook
 Only runs if `.git/` exists. Verifies:
@@ -99,6 +106,7 @@ Fixes are applied in a fixed order. Each fix is idempotent — if the target sta
 | Missing `last-ingest-sha` | Write current `git rev-parse HEAD`, or empty for non-git projects |
 | Missing category stub index | Write minimal stub with YAML frontmatter and "No entries yet." placeholder |
 | `.gitignore` line missing | Append `llake/.state/` (ensures file ends with newline first) |
+| `llake/.gitattributes` missing or incomplete | If the file is missing, copy `templates/gitattributes` verbatim, comments included (they record why the rules exist and why wiki pages must never be added). If it exists, make sure it ends with a newline, then append only the missing rule lines. Doctor never reorders, rewrites, or deletes existing lines. This is how installs that predate the rules pick them up |
 | Post-merge hook missing, drifted, or not executable | Write correct shim and `chmod +x` in one operation |
 | Plugin manifest issues | Report only — instructs user to reinstall (manifest is plugin code, not user data) |
 | Stale manual `settings.json` entries | Remove matching entries from `~/.claude/settings.json` and `<project>/.claude/settings.json`; leave unrelated entries untouched |
@@ -125,6 +133,7 @@ Plugin:  /absolute/path/to/plugin
 
 [CHECK] LoreLake structure         : OK
 [CHECK] .gitignore                 : MISSING ENTRY
+[CHECK] llake/.gitattributes       : MISSING FILE
 [CHECK] Post-merge hook            : NOT WIRED (git repo present)
 [CHECK] Plugin manifest            : OK
 [CHECK] Stale manual entries       : NONE
@@ -132,13 +141,16 @@ Plugin:  /absolute/path/to/plugin
 [CHECK] Config key coverage        : 2 keys missing → merging from defaults
 
 [FIX] Appending llake/.state/ to .gitignore           : DONE
+[FIX] Writing llake/.gitattributes merge rules        : DONE
 [FIX] Wiring .git/hooks/post-merge                    : DONE
 [FIX] Merging missing keys: ingest.exclude, foo.bar   : DONE
 
-Summary: 3 issues, 3 fixed. LoreLake is healthy.
+Summary: 4 issues, 4 fixed. LoreLake is healthy.
 ```
 
 The summary line always appears last. Partial outcomes append counts for failed fixes. Non-git-repo state produces a `Note:` line after the summary rather than an issue count.
+
+`[CHECK] llake/.gitattributes` has three possible values. `OK` means every rule from the template is present. `MISSING FILE` means the template was copied in. `N RULES MISSING` means the file exists and only the missing rules were appended. The line sits between the `.gitignore` and post-merge hook lines, following the check order.
 
 ---
 
@@ -181,6 +193,7 @@ The flag blocks only *autonomous* discovery by the model. Explicit `/llake-docto
 - Doctor sweeps orphaned `llake/.state/install-plan.md` files from interrupted installs.
 - Doctor warns on an `ingest.pipeline` value other than `legacy` or `v2`, because the hook treats unknown values as legacy without complaint.
 - `disable-model-invocation: true` blocks autonomous discovery only; explicit and `Skill`-tool invocations are still allowed.
+- Check 2.5 keeps `llake/.gitattributes` in sync with `templates/gitattributes`. It compares fields rather than raw lines, and the fix only appends. Doctor is how installs that predate the union merge rules get upgraded.
 
 ## Code References
 
@@ -189,6 +202,8 @@ The flag blocks only *autonomous* discovery by the model. Explicit `/llake-docto
 - `templates/config.default.json` — source of truth for forward-merge and schema version
 - `templates/plan.md.tmpl` — install plan (Phase 4 of which invokes doctor)
 - `templates/index.md.tmpl` — template used when `index.md` is missing
+- `templates/gitattributes` — merge rules that Check 2.5 compares against and the fix copies or appends
+- `skills/llake-doctor/SKILL.md:74` — Check 2.5; `skills/llake-doctor/SKILL.md:195` — the additive `.gitattributes` fix
 - `schema/core.md` — category stub frontmatter requirements
 
 ---
@@ -200,3 +215,4 @@ The flag blocks only *autonomous* discovery by the model. Explicit `/llake-docto
 - [[runtime-layout]] — full directory tree doctor verifies
 - [[config-schema]] — config keys, defaults, and `_schemaVersion` semantics
 - [[post-merge-hook]] — the hook doctor wires via the `.git/hooks/post-merge` shim
+- [[append-only-merge-conflicts]] — why `llake/.gitattributes` exists and what must never be added to it

@@ -9,6 +9,7 @@ related:
   - "[[apply-ingest-plan]]"
   - "[[build-ingest-context]]"
   - "[[page-format]]"
+  - "[[append-only-merge-conflicts]]"
 ---
 # frontmatter.py
 

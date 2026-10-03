@@ -103,3 +103,16 @@ Pages affected: [[post-merge-hook]], [[session-end-hook]], [[session-start-hook]
 ## [2026-09-20] ingest | v2 | b3c9116..0c3b7ea | Document the new ingest batching gate (ingest_gate.py plus post-merge integration, ingest.schedule.* config, and LLAKE_IGNORE_SCHEDULE), the ingest-cursor.sh helpers that move last-ingest-sha and .state/last-ingest-at together, and the watchdog kill_tree fix that stops orphaned sleep processes. Update the post-merge, config, runtime-layout, v2-orchestrator, session-capture-worker, agent-run, and ADR-001 pages to match.
 Pages affected: [[post-merge-hook]], [[config-schema]], [[runtime-layout]], [[ingest-v2-orchestrator]], [[session-capture-worker]], [[agent-run]], [[hooks]], [[lib]], [[gotchas]], [[adr-001-post-merge-trigger]], [[ingest-gate]], [[ingest-cursor]], [[watchdog-sleep-orphans]]
 
+
+## [2026-09-22] ingest | v2 | 0c3b7ea..cb26bbe | Document the new llake/.gitattributes merge=union rules for log.md and the fixed-category indexes: new gotcha page, runtime-layout entry, /llake-doctor Check 2.5 and additive fix, /llake-lady install step and prerequisite, gotchas index row.
+Pages affected: [[runtime-layout]], [[llake-doctor-skill]], [[llake-lady-skill]], [[gotchas]], [[append-only-merge-conflicts]]
+
+
+## [2026-09-25] ingest | v2 | cb26bbe..738c22b | skipped: no in-scope changes: the context builder found no commits or changed files in scope for cb26bbe..738c22b (the recent commits touch docs/research, the glossary, version metadata, and llake/ itself), and it produced no diffs
+
+
+## [2026-10-02] ingest | v2 | 738c22b..1b4bbac | skipped: No in-scope files changed in 738c22b..1b4bbac: changes.json lists no commits or touched files and no diffs were generated. The merged PR #16 commits are docs-only (LOR-5 quality bar, LOR-14 glossary), which are outside ingest scope.
+
+
+## [2026-10-02] ingest | v2 | 1b4bbac..a014fcf | skipped: no in-scope commits or file changes in range (changes.json lists zero commits and zero touched files; only merge commits)
+

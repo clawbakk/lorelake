@@ -9,6 +9,7 @@ related:
   - "[[apply-ingest-plan]]"
   - "[[page-format]]"
   - "[[ingest-v2-pipeline]]"
+  - "[[append-only-merge-conflicts]]"
 ---
 # Numbered ADR slugs collide across branches
 
