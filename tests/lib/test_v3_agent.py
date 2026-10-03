@@ -120,7 +120,7 @@ def fake_claude(tmp_path, monkeypatch):
     script.write_text(textwrap.dedent("""\
         #!{py}
         import json, os, sys, time
-        prompt = sys.stdin.read()
+        prompt = sys.stdin.buffer.read().decode("utf-8")  # as the real CLI reads it
         with open(os.environ["FAKE_OUT"], "w") as fh:
             json.dump({{"prompt": prompt, "argv": sys.argv[1:],
                        "env": {{k: os.environ.get(k) for k in ("IS_LLAKE_AGENT", "CLAUDE_CODE_PROMPT_CACHE_TTL",
@@ -211,3 +211,22 @@ def test_kill_signal_during_a_spawn_is_held_until_the_agent_is_registered(fake_c
             signal.signal(sig, h)
         if a.proc is not None and a.proc.poll() is None:
             a.proc.kill()
+
+
+def test_non_ascii_prompt_reaches_the_agent_under_a_c_locale(fake_claude):
+    """The prompt goes to stdin as UTF-8 whatever the run's locale (templates hold non-ASCII text)."""
+    import subprocess
+    prompt = "Rule — the writer’s café “quote” ✓"
+    code = textwrap.dedent("""\
+        import sys, time
+        sys.path.insert(0, {lib!r})
+        from ingest_v3 import agent
+        a = agent.Agent("writer-b01", agent.build_argv("sonnet", "medium", 1, "Read", "Read"), {prompt!r},
+                        {cwd!r}, {out!r}, 60, "5m").start()
+        print(a.wait(sleep=lambda _: time.sleep(0.05))["class"])
+        """).format(lib=str(v3_helpers.LIB), prompt=prompt, cwd=str(fake_claude), out=str(fake_claude / "stages"))
+    env = dict(os.environ, LC_ALL="C", LANG="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0")
+    env.pop("PYTHONIOENCODING", None)
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, encoding="utf-8")
+    assert out.returncode == 0, out.stderr[-600:]
+    assert json.loads((fake_claude / "seen.json").read_text(encoding="utf-8"))["prompt"] == prompt

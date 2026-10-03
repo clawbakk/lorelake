@@ -176,7 +176,7 @@ class Agent:
         try:
             self.proc = subprocess.Popen(self.argv, cwd=self.cwd, env=env, stdin=subprocess.PIPE,
                                          stdout=self._out, stderr=self._err, start_new_session=True,
-                                         universal_newlines=True)
+                                         universal_newlines=True, encoding="utf-8", errors="replace")
             _LIVE.add(self)
         except OSError as exc:
             self._err.write("spawn failed: {}\n".format(exc))
