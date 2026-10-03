@@ -35,7 +35,8 @@ def take_pre(state):
     top = os.path.abspath(state.llake)
     shutil.copytree(state.llake, pre,
                     ignore=lambda d, names: [".state"] if os.path.abspath(d) == top else [])
-    dump_json(os.path.join(state.dir, "pre-manifest.json"), _manifest(state.llake))
+    # Hash the copy, not the live tree: a file created after copytree must not look like pre-run state.
+    dump_json(os.path.join(state.dir, "pre-manifest.json"), _manifest(pre))
 
 
 def current_manifest(state):
@@ -43,16 +44,22 @@ def current_manifest(state):
 
 
 def _restore_llake(state, rel, source):
-    """Restore llake/<rel> from `source`, or delete it when source is None. Refuses anything outside llake/."""
+    """Restore llake/<rel> from `source`, or delete it when source is None (explicit evidence of absence).
+
+    A source that is given but missing is not evidence of absence: the file is left alone and False returned.
+    Refuses anything outside llake/."""
     root = os.path.abspath(state.llake)
     target = os.path.abspath(os.path.join(root, rel))
     if not target.startswith(root + os.sep):
         raise ValueError("refusing to touch {} outside llake/".format(target))
-    if source and os.path.exists(source):
+    if source is not None:
+        if not os.path.exists(source):
+            return False
         os.makedirs(os.path.dirname(target), exist_ok=True)
         shutil.copy2(source, target)
     elif os.path.exists(target):
         os.remove(target)
+    return True
 
 
 def mark_owned(state, pages):
@@ -82,20 +89,37 @@ def snapshot(state, pages, dest):
 
 
 def restore_page(state, page, snap_dir):
-    manifest = load_json(os.path.join(snap_dir, "manifest.json"), {}) or {}
-    _restore_llake(state, page, os.path.join(snap_dir, page) if manifest.get(page) else None)
+    """Three-state restore: "restored", "deleted" (manifest value exactly False) or "unrestored" (left alone)."""
+    manifest = load_json(os.path.join(snap_dir, "manifest.json"), None)
+    existed = manifest.get(page) if isinstance(manifest, dict) else None
+    if existed is True:
+        ok = _restore_llake(state, page, os.path.join(snap_dir, page))
+        return "restored" if ok else "unrestored"
+    if existed is False:
+        _restore_llake(state, page, None)
+        return "deleted"
+    return "unrestored"
 
 
 def revert(state, pages, dest):
+    """Restore each page from its snapshot; returns the pages that could not be restored (kept in inFlight)."""
+    unrestored = []
     for p in pages:
-        restore_page(state, p, dest)
-        state.journal["inFlight"].pop(p, None)
+        if restore_page(state, p, dest) == "unrestored":
+            unrestored.append(p)
+        else:
+            state.journal["inFlight"].pop(p, None)
     state.save()
+    return unrestored
 
 
 def settle(state, pages):
+    """Keep the edits; remember which pages the run really changed (revert_run restores only those)."""
+    changed = state.journal.setdefault("changed", [])
     for p in pages:
-        state.journal["inFlight"].pop(p, None)
+        dest = state.journal["inFlight"].pop(p, None)
+        if dest is not None and p not in changed and changed_since(state, p, dest):
+            changed.append(p)
     state.save()
 
 
@@ -114,6 +138,12 @@ def page_diff(state, page, dest):
 
 def out_of_surface(state, summary, surface_pages, allowed_dirs=()):
     allowed = {os.path.abspath(state.abs(p)) for p in surface_pages}
+    allowed |= {os.path.abspath(state.abs(p)) for p in state.journal.get("owned") or []}
+    denied = set()
+    for d in summary.get("permission_denials") or []:
+        fp = str(((d or {}).get("tool_input") or {}).get("file_path") or "") if isinstance(d, dict) else ""
+        if fp:
+            denied.add(os.path.abspath(fp if os.path.isabs(fp) else os.path.join(state.project, fp)))
     dirs = [os.path.abspath(d) + os.sep for d in allowed_dirs]
     llake = os.path.abspath(state.llake) + os.sep
     inside, outside = [], []
@@ -122,7 +152,7 @@ def out_of_surface(state, summary, surface_pages, allowed_dirs=()):
         if not path:
             continue
         path = os.path.abspath(path if os.path.isabs(path) else os.path.join(state.project, path))
-        if path in allowed or any(path.startswith(d) for d in dirs):
+        if path in allowed or path in denied or any(path.startswith(d) for d in dirs):
             continue
         if path.startswith(llake):
             rel = path[len(llake):].replace(os.sep, "/")
@@ -135,17 +165,21 @@ def out_of_surface(state, summary, surface_pages, allowed_dirs=()):
 
 def revert_out_of_surface(state, stage, inside, outside):
     pre = os.path.join(state.dir, PRE)
-    before = load_json(os.path.join(state.dir, "pre-manifest.json"), {}) or {}
+    before = load_json(os.path.join(state.dir, "pre-manifest.json"), None)
     now = _manifest(state.llake)
     actions = []
     for rel in inside:
-        if rel.split("/")[0] == ".state":
-            actions.append({"stage": stage, "path": "llake/" + rel, "action": "reported"})
+        path = "llake/" + rel
+        if rel.split("/")[0] == ".state" or not isinstance(before, dict):
+            actions.append({"stage": stage, "path": path, "action": "reported"})
             continue
         if now.get(rel) == before.get(rel):
             continue
-        _restore_llake(state, rel, os.path.join(pre, rel) if rel in before else None)
-        actions.append({"stage": stage, "path": "llake/" + rel, "action": "reverted"})
+        if rel in before:
+            ok = _restore_llake(state, rel, os.path.join(pre, rel))
+        else:
+            ok = _restore_llake(state, rel, None)
+        actions.append({"stage": stage, "path": path, "action": "reverted" if ok else "reported"})
     for path in outside:
         actions.append({"stage": stage, "path": path, "action": "reported-outside-llake"})
     if actions:
@@ -155,7 +189,10 @@ def revert_out_of_surface(state, stage, inside, outside):
 
 
 def revert_run(project_root, agent_dir):
-    """Kill path (cursor-table row 9): undo this run's writes under llake/; no-op once finalized."""
+    """Kill path (cursor-table row 9): undo what this run's writers changed under llake/; no-op once finalized.
+
+    Restores inFlight, changed and finalizeWrites pages. Anything without evidence (missing copy/manifest) is
+    left alone, reported as unrestored and keeps the run un-aborted so dead-run recovery can retry it."""
     state = RunState(project_root, agent_dir)
     j = state.journal
     if j.get("finalized"):
@@ -164,24 +201,31 @@ def revert_run(project_root, agent_dir):
         return {"skipped": True, "reason": "run already reverted"}
     pre = os.path.join(state.dir, PRE)
     before = load_json(os.path.join(state.dir, "pre-manifest.json"), None)
-    if before is None:
+    in_flight = dict(j.get("inFlight") or {})
+    paths = set(in_flight) | set(j.get("changed") or []) | set(j.get("finalizeWrites") or [])
+    paths.discard("log.md")
+    if before is None and not paths:
         j["aborted"] = True
         state.save()
         return {"skipped": True, "reason": "no pre-run copy: nothing was written"}
-    restored = []
-    paths = set(j.get("inFlight") or {}) | set(j.get("owned") or []) | set(j.get("finalizeWrites") or [])
+    restored, unrestored = [], []
     for rel in sorted(paths):
-        if rel == "log.md":
-            continue
-        _restore_llake(state, rel, os.path.join(pre, rel) if rel in before else None)
-        restored.append(rel)
+        if isinstance(before, dict):
+            ok = _restore_llake(state, rel, os.path.join(pre, rel) if rel in before else None)
+        elif rel in in_flight:
+            ok = restore_page(state, rel, in_flight[rel]) != "unrestored"
+        else:
+            ok = False
+        (restored if ok else unrestored).append(rel)
+        if ok:
+            j["inFlight"].pop(rel, None)
     entry = j.get("logEntry") or ""
     if entry:
         log = os.path.join(state.llake, "log.md")
         text = read_text(log)
         if entry in text:
             write_text(log, text.replace(entry, "", 1))
-    j["inFlight"] = {}
-    j["aborted"] = True
+    if not unrestored:
+        j["aborted"] = True
     state.save()
-    return {"skipped": False, "restored": restored}
+    return {"skipped": False, "restored": restored, "unrestored": unrestored}
