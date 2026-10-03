@@ -10,6 +10,7 @@ related:
   - "[[post-merge-hook]]"
   - "[[session-capture-worker]]"
   - "[[bash-3-2-portability]]"
+  - "[[ingest-v3-orchestrator]]"
 ---
 # Killing a watchdog subshell orphans its `sleep`
 

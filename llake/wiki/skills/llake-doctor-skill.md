@@ -3,7 +3,7 @@ title: "/llake-doctor — Diagnose and Repair"
 description: "Idempotent health checker that diagnoses and repairs LoreLake install drift"
 tags: [skills, maintenance, repair]
 created: 2026-04-23
-updated: 2026-09-22
+updated: 2026-10-03
 status: current
 related:
   - "[[llake-lady-skill]]"
@@ -13,6 +13,8 @@ related:
   - "[[config-schema]]"
   - "[[enable-ingest-v2]]"
   - "[[append-only-merge-conflicts]]"
+  - "[[ingest-v3-gap-record]]"
+  - "[[enable-ingest-v3]]"
 ---
 
 # /llake-doctor — Diagnose and Repair
@@ -156,7 +158,7 @@ The summary line always appears last. Partial outcomes append counts for failed 
 
 ## Newer checks and repairs
 
-Four capabilities were added to doctor after the original check list was written.
+Several capabilities were added to doctor after the original check list was written.
 
 ### Check 0 — `python3` availability
 
@@ -172,7 +174,16 @@ The install plan moved from `llake/install-plan.md` (not gitignored — users co
 
 ### Unknown `ingest.pipeline` value
 
-`hooks/post-merge.sh` compares `ingest.pipeline` against the literal string `v2` and treats everything else as legacy — silently. A typo therefore presents as "v2 is configured but never runs". Doctor warns when the value is neither `legacy` nor `v2`. See [[enable-ingest-v2]].
+`hooks/post-merge.sh` compares `ingest.pipeline` against the literal strings `v2` and `v3` and silently treats everything else as legacy. A typo therefore presents as "v2 (or v3) is configured but never runs". Doctor warns when the value is not `legacy`, `v2` or `v3`. The warning text is `expected "legacy", "v2" or "v3"`. See [[enable-ingest-v2]] and [[enable-ingest-v3]].
+
+### Check 8.6 — Ingest gap record
+
+Ingest v3 records the pages it still owes in `llake/ingest-gaps.json` (see [[ingest-v3-gap-record]]). If the file does not exist, nothing is recorded and the report line reads `ABSENT`. Otherwise doctor runs `python3 "$PLUGIN_ROOT/hooks/lib/ingest-v3.py" validate-gaps --llake-root "<project>/llake"` and reads the first output line:
+
+- `OK: N gaps (K major, S stuck), R skipped ranges` → no issue. Each following `STUCK:` line (a gap that failed three dispatched attempts and is no longer retried) and each `RANGE:` line (a commit range skipped after analysis failed on it twice) is shown under the report line as a `! needs a human:` warning, not an issue.
+- `INVALID: <reason>` (exit 1) → an issue. Doctor **never repairs** this file, because rewriting it would forget owed pages. When every reason is `page <path> does not exist` or `quote not on the page`, it is the expected result of a human editing pages between runs. It is reported as `INVALID — needs attention, self-heals on next ingest run`. Any other reason (invalid JSON, a schema violation, a duplicate page, `stuck` disagreeing with `attempts`) is real damage. The user fixes the file by hand or deletes it to forget every owed page. When the output cannot be classified, doctor says so rather than guessing.
+
+The report line is `[CHECK] Ingest gap record : ABSENT | OK (N gaps, S stuck, R skipped ranges) | INVALID — <reason>`.
 
 ### On `disable-model-invocation: true`
 
@@ -191,7 +202,8 @@ The flag blocks only *autonomous* discovery by the model. Explicit `/llake-docto
 - Check 0 probes for `python3 >= 3.8` and short-circuits every later check if it is missing — without it, hooks fail silently.
 - Fix 3 chains an existing `post-merge` hook via `.git/hooks/post-merge.pre-llake` instead of clobbering it; the original's exit code wins.
 - Doctor sweeps orphaned `llake/.state/install-plan.md` files from interrupted installs.
-- Doctor warns on an `ingest.pipeline` value other than `legacy` or `v2`, because the hook treats unknown values as legacy without complaint.
+- Doctor warns on an `ingest.pipeline` value other than `legacy`, `v2` or `v3`, because the hook treats unknown values as legacy without complaint.
+- Check 8.6 validates `llake/ingest-gaps.json` through `ingest-v3.py validate-gaps` and lists stuck gaps and skipped ranges as needing a human. Doctor never edits or deletes the file.
 - `disable-model-invocation: true` blocks autonomous discovery only; explicit and `Skill`-tool invocations are still allowed.
 - Check 2.5 keeps `llake/.gitattributes` in sync with `templates/gitattributes`. It compares fields rather than raw lines, and the fix only appends. Doctor is how installs that predate the union merge rules get upgraded.
 
@@ -205,6 +217,7 @@ The flag blocks only *autonomous* discovery by the model. Explicit `/llake-docto
 - `templates/gitattributes` — merge rules that Check 2.5 compares against and the fix copies or appends
 - `skills/llake-doctor/SKILL.md:74` — Check 2.5; `skills/llake-doctor/SKILL.md:195` — the additive `.gitattributes` fix
 - `schema/core.md` — category stub frontmatter requirements
+- `hooks/lib/ingest-v3.py validate-gaps` (`hooks/lib/ingest_v3/cli.py:14`) — the Check 8.6 validator
 
 ---
 
@@ -216,3 +229,4 @@ The flag blocks only *autonomous* discovery by the model. Explicit `/llake-docto
 - [[config-schema]] — config keys, defaults, and `_schemaVersion` semantics
 - [[post-merge-hook]] — the hook doctor wires via the `.git/hooks/post-merge` shim
 - [[append-only-merge-conflicts]] — why `llake/.gitattributes` exists and what must never be added to it
+- [[ingest-v3-gap-record]] — the file Check 8.6 validates

@@ -3,7 +3,7 @@ title: "Configuration Schema"
 description: "Complete reference for all config.json keys, defaults, types, and effects"
 tags: [config, reference, schema]
 created: 2026-04-23
-updated: 2026-09-20
+updated: 2026-10-03
 status: current
 related:
   - "[[config-layering]]"
@@ -17,6 +17,8 @@ related:
   - "[[claude-p-tools-flag]]"
   - "[[planner-plan-json-fragility]]"
   - "[[ingest-gate]]"
+  - "[[ingest-v3-pipeline]]"
+  - "[[enable-ingest-v3]]"
 ---
 
 # Configuration Schema
@@ -81,7 +83,7 @@ The file below is `templates/config.default.json` with inline commentary explain
       "minChangedLines": 1500,
       "maxAgeHours": 24
     }
-    // "pipeline" and "v2" are documented under ingest.pipeline / ingest.v2.* below
+    // "pipeline", "v2" and "v3" are documented under ingest.pipeline / ingest.v2.* / ingest.v3.* below
   },
 
   // ── lint ─────────────────────────────────────────────────────────────────
@@ -428,11 +430,11 @@ Same enforcement mechanism as `sessionCapture.allowedTools` — passed to `claud
 |-----------|-------|
 | Type | `string` |
 | Default | `"legacy"` |
-| Accepted | `"legacy"`, `"v2"` |
+| Accepted | `"legacy"`, `"v2"`, `"v3"` |
 
-Selects which ingest implementation `hooks/post-merge.sh` runs. `"legacy"` spawns a single `claude -p` agent that reads diffs and writes wiki files itself. `"v2"` runs the planner → Python applier → fixer pipeline described in [[ingest-v2-pipeline]].
+Selects which ingest implementation `hooks/post-merge.sh` runs. `"legacy"` spawns a single `claude -p` agent that reads diffs and writes wiki files itself. `"v2"` runs the planner → Python applier → fixer pipeline described in [[ingest-v2-pipeline]]. `"v3"` runs the staged pipeline described in [[ingest-v3-pipeline]]: analysis, recall, parallel page writers, $0 checks, a fix round and code-owned finalize.
 
-**What breaks if wrong:** the comparison is against the literal string `v2`; **any other value — including a typo like `"V2"` or `"ingest-v2"` — silently falls through to legacy**. Nothing errors, so the symptom is "v2 never seems to run". `/llake-doctor` warns on an unrecognised value for exactly this reason. See [[enable-ingest-v2]].
+**What breaks if wrong:** the comparison is against the literal strings `v2` and `v3`. **Any other value silently falls through to legacy, including a typo like `"V2"`, `"V3"` or `"ingest-v2"`**. Nothing errors, so the symptom is "v2 never seems to run". `/llake-doctor` warns on an unrecognised value for exactly this reason. See [[enable-ingest-v2]].
 
 ---
 
@@ -460,6 +462,41 @@ Note that `ingest.branch`, `ingest.include`, and `ingest.enabled` are still read
 
 **What breaks if wrong:** a `plannerBudgetUsd` set too low truncates the plan mid-JSON, which is unrecoverable (see [[planner-plan-json-fragility]]); an over-large `diffChunkBytes` produces individual patch files the planner may not read in full.
 
+#### `ingest.v3.*`
+
+The `v3` sub-object is only read when `ingest.pipeline` is `"v3"`. `hooks/lib/ingest_v3/config.py` (`V3Config`) looks each key up in the project's `config.json` first and then in `templates/config.default.json`. There are **no defaults in code**: a key missing from both raises `KeyError`, which holds the cursor as an internal error. Each run writes the effective block (minus `_comment`) to `.state/agents/<id>/run-config.json`. Tool surfaces are computed by code, so there are no `allowedTools` keys under v3.
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `analysisModel` | `string` | `"opus"` | Model for the analysis agent that writes the brief. |
+| `analysisEffort` | `string` | `"medium"` | Effort for analysis. |
+| `analysisBudgetUsd` | `number` | `10.00` | `--max-budget-usd` for analysis. **Not checked against `maxRunBudgetUsd`**; `report.md` warns when it alone exceeds the cap. |
+| `analysisTimeoutSeconds` | `integer` | `1800` | Analysis timeout, clipped to the time left before the run deadline. |
+| `recallPass` | `string` | `"opus"` | **Both the recall model and its switch**: `"off"` skips recall; any other value is passed as `--model`. |
+| `recallEffort` | `string` | `"medium"` | Effort for recall. |
+| `recallBudgetUsd` | `number` | `1.00` | Recall budget; recall is skipped when spent + this exceeds the run cap. |
+| `recallTimeoutSeconds` | `integer` | `900` | Recall timeout (clipped to the deadline). |
+| `writerModel` | `string` | `"sonnet"` | Model for page writers and fixers. |
+| `writerEffort` | `string` | `"medium"` | Effort for writers and fixers. |
+| `writerBudgetUsd` | `number` | `3.00` | Budget per writer or fixer agent; reserved against the run cap before each spawn. |
+| `writerTimeoutSeconds` | `integer` | `900` | Writer/fixer timeout (clipped to the deadline). |
+| `writerConcurrency` | `integer` | `4` | Most agents in flight in the writer pool (writers, fixers and verifiers together). |
+| `bundleMaxPages` | `integer` | `4` | Most pages one writer owns. |
+| `bundleMaxWeight` | `number` | `80` | Bundle weight cap; a page weighs its size in KB plus its claim count. A page heavier than the cap goes alone. |
+| `writeMode` | `string` | `"edit"` | `"edit"` (targeted `Edit` calls) or `"write"` (one whole-page `Write`). Any other value raises `ValueError` when the writers are prepared, so every run holds with an internal error. |
+| `fixRound` | `string` | `"on"` | Any other value disables the fix round. |
+| `verifierMode` | `string` | `"off"` | `"off"`, `"accuracy"` or `"accuracy+residual"`. Any other non-`off` value raises when the first verifier is prepared, so the run holds with an internal error. |
+| `verifierModel` / `verifierEffort` | `string` | `"sonnet"` / `"medium"` | Verifier agent settings. |
+| `verifierBudgetUsd` | `number` | `1.00` | Budget per verifier agent. |
+| `verifierTimeoutSeconds` | `integer` | `600` | Verifier timeout (clipped to the deadline). |
+| `cacheTtl` | `string` | `"5m"` | Passed to every agent as `CLAUDE_CODE_PROMPT_CACHE_TTL`. |
+| `maxRunBudgetUsd` | `number` | `40.00` | Run cap. Recall, writers, fixers and verifiers start only while spent + in-flight budgets + their own budget fit under it; pages that never fit become `run-cap` gaps. |
+| `timeoutSeconds` | `integer` | `3600` | Soft run deadline handled in Python. Past it, in-flight writers are reverted and the rest become `timeout` gaps, then the run finalizes. The bash watchdog fires at this + `LLAKE_V3_WATCHDOG_GRACE_SECONDS` (300). |
+
+v3 also reads `ingest.include`, which must be a list of strings or the run holds with `ValueError`. Through the shared hook preamble it also depends on `ingest.enabled`, `ingest.branch` and `ingest.schedule.*`. It ignores the top-level `ingest.model`, `effort`, `maxBudgetUsd`, `timeoutSeconds` and `allowedTools`, and all of `ingest.v2.*`.
+
+Fixed constants (hit-index cap 20, patch split at 60000 bytes, split after 2 failures, stuck after 3 attempts, 25 broken-anchor leads) live in `hooks/lib/ingest_v3/common.py` and are not config. See [[enable-ingest-v3]] for switching a project over.
+
 #### `ingest.schedule.*`
 
 The batching gate evaluated on every post-merge, before either pipeline spawns. It measures the net `git diff --numstat` of the range under `ingest.include` and runs ingest only when **either** arm trips. Otherwise it defers and holds `last-ingest-sha`, so the next merge sees the accumulated range. See [[ingest-gate]].
@@ -470,7 +507,7 @@ The batching gate evaluated on every post-merge, before either pipeline spawns. 
 | `minChangedLines` | `integer` | `1500` | Lines arm. Run when the net added+deleted lines under `ingest.include` since the last ingest reach this value. |
 | `maxAgeHours` | `number` | `24` | Age arm. Run when this many hours have passed since `.state/last-ingest-at`, however small the pile. It is only evaluated when a merge fires the hook, so it is not a timer. |
 
-These keys apply to both the legacy and v2 pipelines. `LLAKE_IGNORE_SCHEDULE=1` in the hook's environment forces a run for one invocation (a manual flush). It is an environment variable, not a config key. The gate script has no defaults of its own: the hook reads these values through `read-config.py` and passes them as required flags.
+These keys apply to all three pipelines. Under v3, an open major gap in `llake/ingest-gaps.json` overrides `WAIT` and `EMPTY` (see [[ingest-gate]]). `LLAKE_IGNORE_SCHEDULE=1` in the hook's environment forces a run for one invocation (a manual flush). It is an environment variable, not a config key. The gate script has no defaults of its own: the hook reads these values through `read-config.py` and passes them as required flags.
 
 **What breaks if wrong:** a non-numeric `minChangedLines` or `maxAgeHours` makes the gate exit 2 on argument parsing. The hook then fails open, so every merge runs with `gate: reason=gate-error` in `hooks.log` and batching is silently off. Very high thresholds defer ingest until the age arm trips, so the wiki lags by at least `maxAgeHours`, and longer when merges are sparse.
 
@@ -655,6 +692,7 @@ A string injected into the ingest prompt template's `{{EXAMPLES}}` slot. When no
 - `sessionCapture.writableCategories` is both a prompt-level constraint (injected into the agent's instructions) and a design-level boundary. It should mirror `llake.fixedCategories` unless you have intentionally added project-specific categories.
 - The `prompts.ingest.EXAMPLES` key is the primary lever for tuning ingest output quality without modifying plugin code.
 - `ingest.schedule.*` is the primary lever for ingest **cost**: it batches small merges into one run. `enabled: false` restores run-per-merge but never disables the empty-pile skip.
+- `ingest.v3.*` has no code defaults: a key missing from both files holds every v3 run. `recallPass` doubles as the recall model and its on/off switch, and `maxRunBudgetUsd` caps every v3 agent except analysis.
 
 ---
 
@@ -669,6 +707,8 @@ A string injected into the ingest prompt template's `{{EXAMPLES}}` slot. When no
 - `hooks/post-merge.sh:182-184` — reads `ingest.schedule.enabled` / `minChangedLines` / `maxAgeHours` for the gate
 - `hooks/lib/ingest_gate.py` — consumes the `ingest.schedule.*` values as required CLI flags, with no defaults of its own
 - `tests/lib/test_read_config.py` — covers the `ingest.schedule.*` defaults resolving through the fallback
+- `hooks/lib/ingest_v3/config.py:30` — `V3Config`: user config over plugin defaults, `KeyError` on a missing key, `effective()` for `run-config.json`
+- `tests/lib/test_v3_config.py` — `ingest.v3` defaults and lookup
 
 ---
 
@@ -681,3 +721,5 @@ A string injected into the ingest prompt template's `{{EXAMPLES}}` slot. When no
 - [[session-start-hook]] — the hook that reads `llake.*` config for context injection
 - [[three-writer-model]] — how bootstrap, ingest, and capture relate to each other
 - [[template-system]] — how `prompts.*` overrides are applied during prompt rendering
+- [[ingest-v3-pipeline]] — what the `ingest.v3.*` keys control
+- [[enable-ingest-v3]] — switching a project to v3

@@ -11,6 +11,8 @@ related:
   - "[[config-schema]]"
   - "[[ingest-v2-orchestrator]]"
   - "[[session-end-hook]]"
+  - "[[ingest-v3-pipeline]]"
+  - "[[ingest-v3-writers]]"
 ---
 # --allowedTools does not restrict tools in -p mode
 

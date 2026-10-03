@@ -3,7 +3,7 @@ title: "Three-Writer Model"
 description: "How bootstrap, ingest, and capture divide write surface and responsibilities"
 tags: [architecture, writers, agents, hooks]
 created: 2026-04-23
-updated: 2026-09-20
+updated: 2026-10-03
 status: current
 related:
   - "[[session-start-hook]]"
@@ -15,6 +15,7 @@ related:
   - "[[ingest-v2-pipeline]]"
   - "[[apply-ingest-plan]]"
   - "[[adr-plan-apply-split]]"
+  - "[[ingest-v3-pipeline]]"
 ---
 
 ## Overview
@@ -204,17 +205,19 @@ The three writers do not communicate at runtime — they share only the wiki fil
 
 ## Two implementations of the ingest writer
 
-The three-writer model describes *roles*, not processes, and the ingest role now has two interchangeable implementations selected by `ingest.pipeline`:
+The three-writer model describes *roles*, not processes, and the ingest role now has three interchangeable implementations selected by `ingest.pipeline`:
 
-| | Legacy | v2 |
-|---|---|---|
-| Agents per run | 1 | 1 planner + optionally 1 fixer |
-| Who writes wiki files | the agent, via `Write`/`Edit` | `apply_ingest_plan.py` |
-| Agent tool allowlist | `Read, Write, Edit, Glob, Grep, Bash` | `Read, Glob, Grep` |
-| Write-surface enforcement | prompt rules + `--tools` | prompt rules + a Python path guard |
-| Failure granularity | whole run | per-operation, with a repair pass |
+| | Legacy | v2 | v3 |
+|---|---|---|---|
+| Agents per run | 1 | 1 planner + optionally 1 fixer | 1 analysis + optional recall + parallel writers (one per bundle) + fixers + optional verifiers |
+| Who writes wiki files | the agent, via `Write`/`Edit` | `apply_ingest_plan.py` | writer agents edit page bodies; code writes `updated:`, indexes, log, gap record, cursor |
+| Agent tool allowlist | `Read, Write, Edit, Glob, Grep, Bash` | `Read, Glob, Grep` | `Read, Glob, Grep, Edit, Write`, no `Bash`; writes limited per file by `Edit(/path)` rules |
+| Write-surface enforcement | prompt rules + `--tools` | prompt rules + a Python path guard | permission rules (`--permission-mode dontAsk`) + post-write attribution that reverts out-of-surface writes |
+| Failure granularity | whole run | per-operation, with a repair pass | per page, with a fix round; unfinished pages recorded as gaps |
 
 The v2 planner is **read-only**. It emits a JSON plan and never touches the wiki; a Python applier executes it. This changes the character of the safety rails for this writer: forbidden paths are no longer a thing an agent is asked not to do, they are a thing `check_write_path` refuses to do. `wiki/discussions/**` is not merely off-limits to ingest under v2 — the wiki walker skips it entirely, so it is invisible to scrubbing, inline-link scanning, and slug resolution. The boundary between the ingest writer and the capture writer is enforced in code rather than by convention.
+
+v3 lets agents write again, but each writer may edit only the pages it was assigned, enforced by the CLI's permission rules. The run checks every write afterwards and reverts any that land outside that surface. Every bookkeeping write is done by code. Pages a v3 run cannot finish are recorded in `llake/ingest-gaps.json` rather than lost. See [[ingest-v3-pipeline]].
 
 Capture and bootstrap are unchanged: both still write files directly. See [[ingest-v2-pipeline]] and [[apply-ingest-plan]].
 
@@ -228,7 +231,8 @@ Capture and bootstrap are unchanged: both still write files directly. See [[inge
 - Write surfaces are enforced both at the shell level (`--allowedTools`) and in prompt instructions.
 
 ---
-- The ingest *role* has two implementations (`ingest.pipeline`: `legacy` or `v2`); the role's boundaries are identical either way.
+- The ingest *role* has three implementations (`ingest.pipeline`: `legacy`, `v2` or `v3`); the role's boundaries are identical in every case.
+- Under v3, writer agents are confined to their own pages at the permission level, and code owns `updated:`, indexes, the log entry, the gap record and the cursor.
 - Under v2 the ingest agent is read-only and a Python applier performs every write, so the write surface is enforced in code.
 - `wiki/discussions/**` is invisible to the v2 applier's wiki walker, not merely forbidden to it.
 
@@ -256,3 +260,4 @@ Capture and bootstrap are unchanged: both still write files directly. See [[inge
 - [[llake-bootstrap-skill]] — bootstrap skill specification
 - [[runtime-layout]] — where agent logs and session directories live
 - [[plugin-project-duality]] — what the plugin repo contains vs. what a project install contains
+- [[ingest-v3-pipeline]] — the third ingest implementation

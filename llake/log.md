@@ -116,3 +116,7 @@ Pages affected: [[runtime-layout]], [[llake-doctor-skill]], [[llake-lady-skill]]
 
 ## [2026-10-02] ingest | v2 | 1b4bbac..a014fcf | skipped: no in-scope commits or file changes in range (changes.json lists zero commits and zero touched files; only merge commits)
 
+
+## [2026-10-03] ingest | v2 | a014fcf..1986e58 | Document ingest pipeline v3 (LOR-20). It adds a staged Python orchestrator in hooks/lib/ingest_v3, the ingest-v3.sh glue and the v3 branch of post-merge.sh. It also adds the llake/ingest-gaps.json gap record and its gate override, the ingest.v3.* config, doctor Check 8.6, the bootstrap gap-record reset and the render_text in-process API. This plan creates architecture, module, template, playbook and gotcha pages, updates the affected hook, config, layout, skill and index pages, and fixes stale post-merge.sh line anchors.
+Pages affected: [[post-merge-hook]], [[config-schema]], [[runtime-layout]], [[post-merge-lock]], [[ingest-gate]], [[render-prompt]], [[llake-doctor-skill]], [[llake-bootstrap-skill]], [[three-writer-model]], [[ingest-v2-pipeline]], [[hooks]], [[lib]], [[architecture]], [[gotchas]], [[playbook]], [[templates]], [[ingest-v3-pipeline]], [[ingest-v3-orchestrator]], [[ingest-v3-run-planning]], [[ingest-v3-brief]], [[ingest-v3-writers]], [[ingest-v3-snapshots]], [[ingest-v3-finalize]], [[ingest-v3-gap-record]], [[ingest-v3-templates]], [[enable-ingest-v3]], [[lock-owner-pid-is-hook-pid]], [[v3-agents-escape-tree-kill]], [[revert-from-pre-run-copy]], [[popen-stdin-locale-encoding]]
+

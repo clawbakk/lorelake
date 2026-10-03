@@ -1,6 +1,6 @@
 ---
 title: "ingest_gate.py — Ingest Batching Gate"
-description: "Decides on every post-merge whether ingest runs now, waits for more churn/time, or skips an empty pile — shared by the legacy and v2 pipelines"
+description: "Decides on every post-merge whether ingest runs now, waits for more churn/time, or skips an empty pile — shared by all pipelines, with a v3 override for owed gaps"
 tags:
   - "lib"
   - "ingest"
@@ -9,7 +9,7 @@ tags:
   - "batching"
   - "python"
 created: 2026-09-20
-updated: 2026-09-20
+updated: 2026-10-03
 status: current
 related:
   - "[[post-merge-hook]]"
@@ -21,12 +21,15 @@ related:
   - "[[ingest-v2-pipeline]]"
   - "[[runtime-layout]]"
   - "[[adr-001-post-merge-trigger]]"
+  - "[[ingest-v3-orchestrator]]"
+  - "[[ingest-v3-gap-record]]"
+  - "[[enable-ingest-v3]]"
 ---
 # ingest_gate.py — Ingest Batching Gate
 
 ## Overview
 
-`hooks/lib/ingest_gate.py` runs on every git `post-merge` on the monitored branch. It decides whether ingest should **run now**, **wait** for more changes to pile up, or **skip** because nothing relevant changed. `hooks/post-merge.sh` calls it after the SHA cursor checks and **before either pipeline (legacy or v2) spawns**, so both pipelines share one decision.
+`hooks/lib/ingest_gate.py` runs on every git `post-merge` on the monitored branch. It decides whether ingest should **run now**, **wait** for more changes to pile up, or **skip** because nothing relevant changed. `hooks/post-merge.sh` calls it after the SHA cursor checks and **before any pipeline (legacy, v2 or v3) spawns**, so all three share one decision. v3 adds one override for owed gaps, described below.
 
 The gate exists to bound ingest cost. Before it, every qualifying merge spawned a full ingest agent (by default an `opus` run with a multi-dollar budget cap). A busy branch with many small merges paid for one full agent run per merge. The v2 pipeline was worse: it had no relevance pre-flight at all and spawned even when nothing under `ingest.include` changed. The gate batches small merges into one larger run by holding the cursor back until enough churn or enough time has accumulated.
 
@@ -91,7 +94,7 @@ The three schedule flags are **required and have no defaults**, by design. Their
 
 ## Integration in post-merge.sh
 
-The gate block sits between the commit-range validation and the v2 hand-off (`hooks/post-merge.sh:169-238`):
+The gate block sits between the commit-range validation and the pipeline hand-offs (`hooks/post-merge.sh:173-255`):
 
 1. **Seed the clock.** `ensure_ingest_clock` seeds `.state/last-ingest-at` if it is missing. `.state/` is gitignored, so every fresh clone lacks it. Without seeding, the missing clock would read as overdue (`reason=no-timestamp`) and force a full ingest on the first merge in every clone on every machine. Seeding starts that clone's own window instead.
 2. **Read the config.** It reads `ingest.schedule.enabled`, `minChangedLines`, and `maxAgeHours` through `read-config.py`.
@@ -103,6 +106,17 @@ The gate block sits between the commit-range validation and the v2 hand-off (`ho
    - **RUN**: fall through to the v2 or legacy spawn. The spawn line in `hooks.log` gains `gate: <detail>`.
 
 EMPTY also resets the clock. `last-ingest-at` means "the wiki is known-current as of T", and after an empty-pile skip that is true.
+
+### v3 override: owed gaps
+
+When `ingest.pipeline` is `v3`, the hook checks the gap record after the gate decides and before it acts on the verdict (`hooks/post-merge.sh:218-229`). For a `WAIT` or `EMPTY` verdict it runs `python3 hooks/lib/ingest-v3.py owed-major --llake-root <llake>`. That exits 0 when `llake/ingest-gaps.json` holds an open, non-stuck gap with severity `major`. Then:
+
+- `WAIT` becomes `RUN` with `reason=gaps` appended to the detail. Small piles no longer delay paying off major debt.
+- `EMPTY` becomes `RUN` with `reason=gaps-only`. The v3 run then plans a `gap-only` run: no analysis, writers on carried major gaps only.
+
+A missing or unreadable gap record owes nothing, and so do stuck or minor-only gaps. `RUN` verdicts are never touched. The gate script itself knows nothing about gaps, and legacy and v2 never read the file. See [[ingest-v3-gap-record]].
+
+A consequence: while a major gap stays owed and is not stuck, every v3 merge on the branch runs ingest regardless of the schedule. After three failed attempts a gap turns stuck and stops forcing runs.
 
 ## The cursor is the queue
 
@@ -124,7 +138,8 @@ A `WAIT` records nothing, and there is no pending-work file. Because `last-inges
 
 ## Key Points
 
-- Runs on every post-merge, before either pipeline. The verdicts are `EMPTY`, `WAIT`, and `RUN`.
+- Runs on every post-merge, before any pipeline. The verdicts are `EMPTY`, `WAIT`, and `RUN`.
+- Under v3 only, an open, non-stuck major gap turns `WAIT` into `RUN reason=gaps` and `EMPTY` into `RUN reason=gaps-only`.
 - The pile is the net `git diff --numstat last..HEAD -- <include>`. Binary files count as files, not lines.
 - Ingest runs when either the lines arm (`minChangedLines`, default 1500) or the age arm (`maxAgeHours`, default 24) trips.
 - `WAIT` holds the cursor (the cursor is the queue). `EMPTY` advances the cursor and clock under the post-merge lock.
@@ -141,9 +156,11 @@ A `WAIT` records nothing, and there is no pending-work file. Because `last-inges
 - `hooks/lib/ingest_gate.py:65-81` — `age_hours`
 - `hooks/lib/ingest_gate.py:89-105` — `decide`, the verdict table
 - `hooks/lib/ingest_gate.py:115-144` — CLI, `LLAKE_IGNORE_SCHEDULE`, exit 2 on git failure
-- `hooks/post-merge.sh:169-217` — clock seeding, config reads, gate invocation, fail-open
-- `hooks/post-merge.sh:219-233` — `EMPTY` branch under the post-merge lock
-- `hooks/post-merge.sh:235-238` — `WAIT` branch
+- `hooks/post-merge.sh:173-216` — clock seeding, config reads, gate invocation, fail-open
+- `hooks/post-merge.sh:218-229` — v3 owed-gap override
+- `hooks/post-merge.sh:236-250` — `EMPTY` branch under the post-merge lock
+- `hooks/post-merge.sh:252-255` — `WAIT` branch
+- `hooks/lib/ingest_v3/gaps.py:69` — `owed_major`
 - `templates/config.default.json` — `ingest.schedule` defaults
 - `tests/lib/test_ingest_gate.py` — unit tests for the numstat summary, age, and verdict logic
 - `tests/hooks/test_post_merge_gate.sh` — 12 integration scenarios: defer, lines arm, age arm, empty pile, forced, disabled, disabled-but-empty, fresh clone, v2 empty/defer/success, fail-open
@@ -156,5 +173,7 @@ A `WAIT` records nothing, and there is no pending-work file. Because `last-inges
 - [[post-merge-lock]] — the lock the `EMPTY` branch takes
 - [[hook-log]] — `render_err_summary` used for fail-open reporting
 - [[ingest-v2-orchestrator]] — only reached after a `RUN`
+- [[ingest-v3-orchestrator]] — the v3 branch reached after a `RUN`
+- [[ingest-v3-gap-record]] — the file the v3 override reads
 - [[runtime-layout]] — where `last-ingest-at` lives
 - [[adr-001-post-merge-trigger]] — why ingest is merge-triggered, not scheduled

@@ -13,6 +13,7 @@ related:
   - "[[ingest-v2-orchestrator]]"
   - "[[session-end-hook]]"
   - "[[ingest-gate]]"
+  - "[[ingest-v3-orchestrator]]"
 ---
 # Hook Log Library
 

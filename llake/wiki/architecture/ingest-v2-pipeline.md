@@ -3,7 +3,7 @@ title: "Ingest Pipeline v2"
 description: "Plan-then-apply ingest: a read-only planner agent emits JSON, a Python applier executes it, a fixer repairs rejected ops"
 tags: [architecture, ingest, pipeline, post-merge, agents]
 created: 2026-09-20
-updated: 2026-09-20
+updated: 2026-10-03
 status: current
 related:
   - "[[post-merge-hook]]"
@@ -18,6 +18,7 @@ related:
   - "[[planner-plan-json-fragility]]"
   - "[[runtime-layout]]"
   - "[[ingest-gate]]"
+  - "[[ingest-v3-pipeline]]"
 ---
 # Ingest Pipeline v2
 
@@ -141,3 +142,4 @@ Before each run the orchestrator deletes any `wiki/**/.*.md.tmp` left behind by 
 - [[enable-ingest-v2]] — how to switch a project over and verify it
 - [[post-merge-hook]] — the hook that dispatches this pipeline
 - [[three-writer-model]] — where ingest sits among the writers
+- [[ingest-v3-pipeline]] — the staged successor, selected with `ingest.pipeline: "v3"`

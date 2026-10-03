@@ -1,5 +1,5 @@
 ---
-updated: 2026-09-20
+updated: 2026-10-03
 ---
 # Hooks
 
@@ -22,3 +22,4 @@ Shell entry-point hooks and bash library modules. The hooks are wired into Claud
 | [[constants]] | Shared shell constants used across LoreLake hooks |
 | [[detect-project-root]] | Three-level strategy to locate the project's llake/config.json from any shell context |
 | [[ingest-cursor]] | Advances last-ingest-sha and the .state/last-ingest-at clock together; seeds the clock in fresh clones |
+| [[ingest-v3-orchestrator]] | How post-merge runs ingest v3 — the v3 lock claim, watchdog and kill trap with revert, run.py's exit codes and hooks.log lines, and the ingest-v3.py subcommands |

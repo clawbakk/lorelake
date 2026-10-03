@@ -11,6 +11,7 @@ related:
   - "[[post-merge-lock]]"
   - "[[ingest-cursor]]"
   - "[[watchdog-sleep-orphans]]"
+  - "[[lock-owner-pid-is-hook-pid]]"
 ---
 
 # Bash 3.2 Portability

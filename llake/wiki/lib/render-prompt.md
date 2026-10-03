@@ -1,9 +1,9 @@
 ---
-title: "render-prompt.py"
+title: render-prompt.py
 description: "Strict {{VAR}} placeholder substitution for prompt template files"
 tags: [lib, prompts, shell-interface]
 created: 2026-04-23
-updated: 2026-04-23
+updated: 2026-10-03
 status: current
 related:
   - "[[render-prompt-strict-exit]]"
@@ -11,6 +11,7 @@ related:
   - "[[ingest-template]]"
   - "[[capture-template]]"
   - "[[triage-template]]"
+  - "[[ingest-v3-templates]]"
 ---
 
 ## Overview
@@ -146,6 +147,12 @@ Every `{{VAR}}` added to a template must be wired in two places:
 
 Failing to wire both sides causes the hook to exit 1 at runtime when it tries to render the prompt. See [[add-new-prompt-placeholder]] for the step-by-step procedure, and [[render-prompt-strict-exit]] for the gotcha and how to diagnose it.
 
+## In-process API: `render_text`
+
+The substitution logic is a function, `render_text(template, section_name, config, runtime_vars, templates_dir=None)`. It returns `(rendered, unresolved, errors)`: the text after one substitution pass, the sorted names nothing could fill, and the fallback-read diagnostics. It never exits and never prints. A non-dict `config` is treated as `{}`. `main()` is now a thin CLI wrapper. It reads the template (exit 2 on failure), calls `render_text`, prints the `errors` to stderr, and exits 1 with `render-prompt: unresolved placeholders: <names>` when anything is unresolved. CLI behavior is unchanged.
+
+Ingest v3 uses the function directly through `hooks/lib/ingest_v3/render.py`. The script's filename has a hyphen, so it cannot be imported normally; `render.py` loads it with `importlib` from its path. Values are passed in-process, so very large values (the wiki catalog, page blocks) never touch argv. Strictness is preserved: unresolved placeholders raise `RenderError`. See [[ingest-v3-templates]].
+
 ## Key Points
 
 - Strict exit on unresolved placeholders is intentional — a broken prompt reaching an agent is worse than a hook that fails fast.
@@ -153,6 +160,7 @@ Failing to wire both sides causes the hook to exit 1 at runtime when it tries to
 - An empty string in a config slot is treated the same as absent — it falls through to the fallback file. Use a non-empty string to override.
 - `--templates-dir` only affects relative fallback paths; absolute paths in `|fallback:` are always used as-is.
 - Rendered output goes to stdout only; use shell redirection or a pipe to pass it to `claude -p`.
+- `render_text` is the same logic as a function returning `(rendered, unresolved, errors)`; ingest v3 calls it in-process, and the CLI wraps it.
 
 ## Code References
 
@@ -161,8 +169,11 @@ Failing to wire both sides causes the hook to exit 1 at runtime when it tries to
 | `PLACEHOLDER_RE` regex | `hooks/lib/render-prompt.py:23` |
 | `template_section_name()` | `hooks/lib/render-prompt.py:34-42` |
 | `parse_runtime_vars()` | `hooks/lib/render-prompt.py:44-50` |
-| `resolve()` inner function | `hooks/lib/render-prompt.py:74-93` |
-| Strict-exit check | `hooks/lib/render-prompt.py:97-101` |
+| `render_text()` | `hooks/lib/render-prompt.py:68-103` |
+| `resolve()` inner function | `hooks/lib/render-prompt.py:80-100` |
+| `main()` CLI wrapper | `hooks/lib/render-prompt.py:106` |
+| Strict-exit check | `hooks/lib/render-prompt.py:126-129` |
+| In-process caller (ingest v3) | `hooks/lib/ingest_v3/render.py:35` |
 | Test suite | `tests/lib/test_render_prompt.py` |
 
 ## See Also
@@ -172,3 +183,4 @@ Failing to wire both sides causes the hook to exit 1 at runtime when it tries to
 - [[ingest-template]] — the ingest prompt template that this tool renders
 - [[capture-template]] — the capture prompt template
 - [[triage-template]] — the triage prompt template
+- [[ingest-v3-templates]] — the v3 templates rendered in-process through `render_text`

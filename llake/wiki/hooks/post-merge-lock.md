@@ -3,7 +3,7 @@ title: "Post-Merge Lock"
 description: "mkdir-based mutex serializing post-merge ingest runs, with a 1-hour stale reclaim"
 tags: [hooks, shell, concurrency, locking, post-merge]
 created: 2026-09-20
-updated: 2026-09-20
+updated: 2026-10-03
 status: current
 related:
   - "[[post-merge-hook]]"
@@ -12,12 +12,14 @@ related:
   - "[[runtime-layout]]"
   - "[[ingest-gate]]"
   - "[[ingest-cursor]]"
+  - "[[ingest-v3-orchestrator]]"
+  - "[[lock-owner-pid-is-hook-pid]]"
 ---
 # Post-Merge Lock
 
 ## Overview
 
-`hooks/lib/post-merge-lock.sh` provides a per-project mutex so only one post-merge ingest run mutates state at a time. Both the v2 and legacy pipelines take it.
+`hooks/lib/post-merge-lock.sh` provides a per-project mutex so only one post-merge ingest run mutates state at a time. All three pipelines (legacy, v2 and v3) take it.
 
 ## The race it prevents
 
@@ -84,6 +86,15 @@ Two caveats for anyone modifying this:
 - Acquisition must happen *inside* the subshell, because `$$` inside a subshell is still the parent shell's PID in bash 3.2; the `owner.pid` written is the value the release check later compares against, so both must be evaluated in the same context.
 - The `EXIT` trap must be installed immediately after a successful acquire. Any early `return`/`exit` between the two leaks the lock for an hour.
 
+## The v3 owner claim
+
+The `owner.pid` that `acquire_post_merge_lock` writes is `$$`. Inside the `( … ) &` background subshell that is the **hook's** PID, and the hook exits right after disowning the subshell. So for every pipeline the recorded owner is dead within moments, and the lock is reclaimable an hour after it was taken, even while the run is alive. Legacy and v2 deadlines (default 1200 s) finish well inside that hour. A v3 run can last up to `ingest.v3.timeoutSeconds` (3600) plus 300 s watchdog grace, so `hooks/lib/ingest-v3.sh` changes two things:
+
+- `claim_v3_lock` rewrites `owner.pid` with `MY_PID`, the subshell's own PID (`$(sh -c 'echo $PPID')`), right after a successful acquire. The owner is then alive for the whole run, and the stale reclaim never fires on a live v3 run.
+- `release_v3_lock` removes the lock only when `owner.pid` is `MY_PID`, or the hook's `$$` (a kill can land between acquire and claim). Any other holder's lock is left alone.
+
+The v3 subshell also **arms its TERM/INT/USR1 kill traps before acquiring**. A TERM between acquiring and arming would otherwise kill the subshell with the lock held until the one-hour reclaim. Before the lock is ours, the trap's `release_v3_lock` is a no-op because of the ownership check. See [[lock-owner-pid-is-hook-pid]] and [[ingest-v3-orchestrator]].
+
 ## Contract with callers
 
 The library reads `STATE_DIR`, `LOG_FILE`, and `HOOK_NAME` from the caller's scope rather than taking parameters — consistent with the other hook libraries, and they are already set by the time it is sourced.
@@ -97,6 +108,8 @@ The library reads `STATE_DIR`, `LOG_FILE`, and `HOOK_NAME` from the caller's sco
 - Release checks PID ownership, so a reclaimed process cannot delete its successor's lock.
 - The losing invocation exits 0 and its range is retried, since the cursor never advanced.
 - Acquire inside the background subshell and install the `EXIT` trap immediately after.
+- `owner.pid` from `acquire_post_merge_lock` names the hook, which exits at once. v3 re-claims the lock under its own subshell PID so its run, which can exceed an hour, is never reclaimed while alive.
+- v3 arms its kill traps before acquiring; its release is a no-op until the lock is its own.
 
 ## Code References
 
@@ -105,8 +118,10 @@ The library reads `STATE_DIR`, `LOG_FILE`, and `HOOK_NAME` from the caller's sco
 - `hooks/lib/post-merge-lock.sh:37-45` — `_llake_lock_owner_alive`
 - `hooks/lib/post-merge-lock.sh:47-69` — `acquire_post_merge_lock`, including reclaim
 - `hooks/lib/post-merge-lock.sh:71-78` — `release_post_merge_lock` and the ownership check
-- `hooks/post-merge.sh:190-195` — v2 acquisition
-- `hooks/post-merge.sh:291-296` — legacy acquisition
+- `hooks/post-merge.sh:280` — v2 acquisition
+- `hooks/post-merge.sh:328-336` — v3: traps, acquisition, `release_v3_lock` EXIT trap, `claim_v3_lock`
+- `hooks/post-merge.sh:419` — legacy acquisition
+- `hooks/lib/ingest-v3.sh:47-59` — `claim_v3_lock` and `release_v3_lock`
 - `tests/hooks/test_post_merge_lock.sh` — acquire, contend, and stale-reclaim tests
 
 ## See Also
@@ -115,3 +130,5 @@ The library reads `STATE_DIR`, `LOG_FILE`, and `HOOK_NAME` from the caller's sco
 - [[ingest-v2-orchestrator]] — runs entirely inside the lock
 - [[bash-3-2-portability]] — why not `flock`
 - [[runtime-layout]] — where the lock sits in `.state/`
+- [[ingest-v3-orchestrator]] — the v3 lock claim and kill trap
+- [[lock-owner-pid-is-hook-pid]] — why the recorded owner is dead within moments

@@ -10,6 +10,7 @@ related:
   - "[[build-ingest-context]]"
   - "[[page-format]]"
   - "[[append-only-merge-conflicts]]"
+  - "[[ingest-v3-writers]]"
 ---
 # frontmatter.py
 

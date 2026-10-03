@@ -10,6 +10,7 @@ related:
   - "[[config-schema]]"
   - "[[debug-hook-failures]]"
   - "[[llake-doctor-skill]]"
+  - "[[enable-ingest-v3]]"
 ---
 # Switch a project to ingest pipeline v2
 

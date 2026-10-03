@@ -11,6 +11,8 @@ related:
   - "[[post-merge-hook]]"
   - "[[bash-3-2-portability]]"
   - "[[watchdog-sleep-orphans]]"
+  - "[[ingest-v3-orchestrator]]"
+  - "[[v3-agents-escape-tree-kill]]"
 ---
 
 ## Overview

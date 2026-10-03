@@ -12,6 +12,8 @@ related:
   - "[[runtime-layout]]"
   - "[[post-merge-lock]]"
   - "[[bash-3-2-portability]]"
+  - "[[ingest-v3-run-planning]]"
+  - "[[ingest-v3-finalize]]"
 ---
 # Ingest Cursor Helpers
 

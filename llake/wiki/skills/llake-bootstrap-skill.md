@@ -3,7 +3,7 @@ title: "/llake-bootstrap — Initial Wiki Population"
 description: "One-time in-session orchestrator that populates the wiki from scratch via parallel subagents"
 tags: [skills, bootstrap, wiki]
 created: 2026-04-23
-updated: 2026-09-20
+updated: 2026-10-03
 status: current
 related:
   - "[[llake-lady-skill]]"
@@ -11,6 +11,7 @@ related:
   - "[[three-writer-model]]"
   - "[[config-schema]]"
   - "[[runtime-layout]]"
+  - "[[ingest-v3-gap-record]]"
 ---
 
 # /llake-bootstrap — Initial Wiki Population
@@ -115,7 +116,7 @@ Only runs if Phase 5 finishes cleanly. Partial finalization would corrupt future
 
 1. **Write `llake/index.md`** — catalog of all categories now present.
 2. **Write every category index** (`wiki/<cat>/<cat>.md`) — one-line summaries of every page from each page's `description:` frontmatter.
-3. **Write `llake/last-ingest-sha`** — `git rev-parse HEAD` written as a single SHA. This is the ingest cursor: every commit after this SHA is the post-merge hook's backlog.
+3. **Write `llake/last-ingest-sha`** — `git rev-parse HEAD` written as a single SHA. This is the ingest cursor: every commit after this SHA is the post-merge hook's backlog. Then **reset `llake/ingest-gaps.json`** to `{"version": 1, "asOf": "<that SHA>", "agent": "bootstrap", "date": "<YYYY-MM-DD>", "gaps": [], "ranges": []}` (2-space indented, trailing newline), replacing any earlier file. A freshly bootstrapped wiki owes nothing, and an older record would point at pages bootstrap just rewrote. Only ingest v3 reads the file. See [[ingest-v3-gap-record]].
 4. **Append the terminal `bootstrap` entry** — this is written **last**. Its presence marks bootstrap as complete; its absence (with `bootstrap-task` entries present) marks a partial state available for resume.
 5. **Print the completion summary** — project path, scope, page count, categories, `last-ingest-sha`, and next steps.
 
@@ -134,7 +135,7 @@ Bootstrap has no per-session config knobs of its own. Model, reasoning effort, t
 | `wiki/**` (any category, including new project-specific ones) | `wiki/discussions/**` — owned by session-capture |
 | `llake/index.md` and category indexes | `schema/**` — immutable to agents |
 | `llake/log.md` (append-only) | `config.json` |
-| `llake/last-ingest-sha` (set exactly once, Phase 6 step 3) | `.state/**` |
+| `llake/last-ingest-sha` and `llake/ingest-gaps.json` (set exactly once, Phase 6 step 3) | `.state/**` |
 | | Anything outside `<project>/llake/` |
 
 ---
@@ -155,6 +156,7 @@ Practical consequence: a large plan takes longer in wall-clock time than it used
 - The terminal `bootstrap` entry in `log.md` is written **last** — its presence or absence is how Phase 1 distinguishes "complete" from "partial/resumable".
 - After bootstrap, `last-ingest-sha` is set to HEAD. Every subsequent merge on the configured branch is processed automatically by the post-merge hook — bootstrap is a one-time operation.
 - Subagents never touch `wiki/discussions/**` — that namespace is session-capture's alone.
+- Subagents are also forbidden from `ingest-gaps.json`. Only the orchestrator writes it, once, in Phase 6, as an empty gap record.
 
 ---
 - Phase 4 runs at most 5 subagents concurrently; the rest are batched. The cap is hard-coded, not configurable.
@@ -193,3 +195,4 @@ Practical consequence: a large plan takes longer in wall-clock time than it used
 - [[config-schema]] — `ingest.include` and other config knobs
 - [[runtime-layout]] — `last-ingest-sha`, `log.md`, and the full directory tree bootstrap populates
 - [[post-merge-hook]] — the hook that handles ongoing wiki updates after bootstrap
+- [[ingest-v3-gap-record]] — the gap record Phase 6 resets

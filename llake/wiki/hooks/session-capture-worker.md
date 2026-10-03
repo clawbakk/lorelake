@@ -16,6 +16,7 @@ related:
   - "[[troubleshoot-session-capture]]"
   - "[[claude-p-tools-flag]]"
   - "[[watchdog-sleep-orphans]]"
+  - "[[revert-from-pre-run-copy]]"
 ---
 # Session Capture Worker
 

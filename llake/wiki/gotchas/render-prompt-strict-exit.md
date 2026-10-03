@@ -8,6 +8,7 @@ status: current
 related:
   - "[[render-prompt]]"
   - "[[add-new-prompt-placeholder]]"
+  - "[[ingest-v3-templates]]"
 ---
 
 # render-prompt.py Strict Exit on Unresolved Placeholders

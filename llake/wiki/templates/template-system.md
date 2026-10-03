@@ -12,6 +12,7 @@ related:
   - "[[capture-template]]"
   - "[[ingest-template]]"
   - "[[add-new-prompt-placeholder]]"
+  - "[[ingest-v3-templates]]"
 ---
 
 ## Overview

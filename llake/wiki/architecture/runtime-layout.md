@@ -3,7 +3,7 @@ title: "Runtime Layout"
 description: "The llake/ directory structure in a target project and what each file does"
 tags: [architecture, layout, runtime, filesystem]
 created: 2026-04-23
-updated: 2026-09-22
+updated: 2026-10-03
 status: current
 related:
   - "[[plugin-project-duality]]"
@@ -16,6 +16,10 @@ related:
   - "[[ingest-gate]]"
   - "[[ingest-cursor]]"
   - "[[append-only-merge-conflicts]]"
+  - "[[ingest-v3-pipeline]]"
+  - "[[ingest-v3-gap-record]]"
+  - "[[ingest-v3-run-planning]]"
+  - "[[ingest-v3-finalize]]"
 ---
 
 ## Overview
@@ -32,6 +36,7 @@ Every project where LoreLake is installed gets a single `llake/` directory at th
   index.md                 # wiki category catalog (root of the wiki)
   log.md                   # append-only activity log (hooks + agent completions)
   last-ingest-sha          # SHA cursor for post-merge ingest
+  ingest-gaps.json         # ingest v3 gap record: pages owed, skipped ranges (committed)
   .gitattributes           # merge=union rules for log.md + fixed-category indexes (committed)
   wiki/
     decisions/             # architectural and design decisions
@@ -42,6 +47,7 @@ Every project where LoreLake is installed gets a single `llake/` directory at th
   .state/                  # gitignored runtime working directory
     hooks.log              # rolled hook audit log
     last-ingest-at         # epoch seconds of the last cursor advance (batching-gate clock)
+    ingest-failures.json   # ingest v3 analysis failure counter
     agents/
       <adj-noun-HHMMSS>/
         agent.log          # full execution trace for one agent run
@@ -108,11 +114,12 @@ The hook also handles its own rotation: when `log.md` exceeds `logging.maxLines`
 
 ### `last-ingest-sha`
 
-**Who writes it:** the hook shell code, **never** an agent. Every write goes through `advance_ingest_cursor` in `hooks/lib/ingest-cursor.sh`, which also stamps `.state/last-ingest-at`. The cursor advances in four situations:
+**Who writes it:** plugin code, **never** an agent. Shell writes go through `advance_ingest_cursor` in `hooks/lib/ingest-cursor.sh`, which also stamps `.state/last-ingest-at`. The v3 orchestrator writes it from Python with `finalize.write_cursor`, which writes the same SHA-plus-clock pair. The cursor advances in five situations:
 1. The batching gate returns `EMPTY` (no change under `ingest.include`) and the post-merge lock is free. No agent is spawned.
 2. The commit range is invalid because of a force-push. The cursor resets to the current HEAD.
 3. A legacy ingest agent exits 0.
 4. A v2 run finalizes, even when some ops failed.
+5. A v3 run finalizes, even when pages became gaps. This includes `empty` and `skip` runs. A `split` run advances only to its midpoint. See [[ingest-v3-finalize]].
 
 When the gate returns `WAIT`, the cursor is deliberately **held**, so the next merge sees the wider range. Bootstrap and `/llake-doctor` repair also write this file directly, without the clock. See [[ingest-cursor]].
 
@@ -127,6 +134,18 @@ When the gate returns `WAIT`, the cursor is deliberately **held**, so the next m
 git rev-parse HEAD > llake/last-ingest-sha
 ```
 Then run `/llake-doctor` to verify.
+
+---
+
+### `ingest-gaps.json`
+
+**Who writes it:** ingest v3 only. Each v3 run rewrites it whole at finalize, and a `skip` run appends to `ranges`. `/llake-bootstrap` resets it to an empty record in Phase 6. Legacy and v2 never read or write it. `/llake-doctor` validates it and never repairs it.
+
+**Who reads it:** the post-merge hook's v3 gate rule (`ingest-v3.py owed-major`), the v3 analysis prompt (the pages already owed), brief assembly (owed pages are carried into the next run), and `/llake-doctor` Check 8.6.
+
+**Purpose:** the pages a v3 run could not bring current, each with its cause, attempt count and the stale claims quoted from the page. It also holds commit ranges skipped after analysis failed on them twice. It is committed, so teammates and clones see the same debt. See [[ingest-v3-gap-record]].
+
+**What breaks if missing:** nothing; a missing file means nothing is owed. Deleting it forgets every owed page and skipped range.
 
 ---
 
@@ -187,6 +206,12 @@ Wait — examining the source: in `session-end.sh` and `post-merge.sh`, `LOG_FIL
 
 **Recovery:** Delete it. The next post-merge reseeds it.
 
+#### `.state/ingest-failures.json`
+
+**Who writes it:** the v3 orchestrator (`plan.record_failure`). It is `{base, count, lastHead}` and counts `work`-class analysis failures and invalid briefs on one cursor base. It is deleted after a successful finalize. Two failures on the same base make the next run ingest only the first half of the range; a one-commit range that fails twice is skipped and recorded. See [[ingest-v3-run-planning]].
+
+**What breaks if missing:** nothing; the count restarts at zero. Because `.state/` is gitignored, the counter is per clone.
+
 #### `.state/agents/<id>/`
 
 Each agent run gets its own subdirectory identified by a human-readable ID in the format `<adjective>-<noun>-HHMMSS` (e.g., `brave-lake-143311`). This ID is generated by `hooks/lib/agent-id.sh` and used in log lines for traceability.
@@ -225,7 +250,7 @@ The project's `.gitignore` (or `llake/.gitignore`) should ignore the `.state/` d
 llake/.state/
 ```
 
-`/llake-lady` sets this up during install. The user-visible files (`config.json`, `index.md`, `log.md`, `last-ingest-sha`, `.gitattributes`, `wiki/**`) should be committed. `.gitattributes` must be committed so teammates and other worktrees get the union merge rules too.
+`/llake-lady` sets this up during install. The user-visible files (`config.json`, `index.md`, `log.md`, `last-ingest-sha`, `ingest-gaps.json`, `.gitattributes`, `wiki/**`) should be committed. `.gitattributes` must be committed so teammates and other worktrees get the union merge rules too.
 
 ---
 
@@ -265,6 +290,8 @@ Three things are worth knowing about this tree:
 - **Renderer stderr files live per-agent, not in `/tmp`.** They were moved so a `SIGKILL` mid-render cannot accumulate orphans in `/tmp`, and so the failure evidence sits next to the `agent.log` that references it.
 - **Agent directories are never garbage-collected.** `_agent_cleanup` deliberately leaves a killed agent's directory intact for post-mortem, and `sessions/<id>/` is left behind on a timeout for the same reason. Over a long-lived install this grows; deleting old `agents/<id>/` directories is always safe.
 
+A v3 run leaves a larger tree in its agent dir. The main files: `run.json` (journal), `ledger.json` (per-stage cost), `pages.json` (per-page outcome and history), `run-config.json`, `pre/` + `pre-manifest.json` (pre-run copy of `llake/`), `inputs/`, `brief/`, `brief.json`, `brief-report.json`, `bundles.json`, `bundles/<bNN>/{snapshot,retryK,fix-snapshot}/`, `stages/<stage>.{jsonl,prompt.md,summary.json}`, `checks*.json`, `finalize.json`, `finalize-snapshot/` and `report.md`. The next run's dead-run recovery reads `run.json` and the snapshots of earlier runs, so do not delete the agent dir of a run that was killed and never reverted. See [[ingest-v3-pipeline]].
+
 Separately, `apply_ingest_plan.py` writes wiki pages through a sibling tempfile named `.<page>.md.tmp` inside `wiki/<category>/`. A kill mid-write leaves that dotfile behind, so the v2 orchestrator sweeps `wiki/**/.*.md.tmp` before each run to keep `git status` clean. See [[ingest-v2-pipeline]].
 
 ## Key Points
@@ -282,6 +309,7 @@ Separately, `apply_ingest_plan.py` writes wiki pages through a sibling tempfile 
 - A v2 run leaves its full audit trail in `.state/agents/<id>/`: `context/`, `plan.json`, `applied.json`, `failed.json`.
 - Renderer stderr is co-located in the agent directory rather than `/tmp`.
 - Agent and session directories are intentionally not cleaned up after a kill; deleting old ones by hand is safe.
+- `llake/ingest-gaps.json` (v3 only) is committed and rewritten whole by each v3 run; `.state/ingest-failures.json` is its per-clone analysis failure counter.
 - `llake/.gitattributes` is committed and marks `log.md` plus the four fixed-category indexes `merge=union`, so parallel appends don't conflict. It is installed by plan Phase 1 and repaired by `/llake-doctor` Check 2.5. See [[append-only-merge-conflicts]].
 
 ## Code References

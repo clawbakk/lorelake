@@ -11,6 +11,7 @@ related:
   - "[[is-llake-agent-guard]]"
   - "[[hook-log]]"
   - "[[enable-ingest-v2]]"
+  - "[[enable-ingest-v3]]"
 ---
 
 # Debug Hook Failures
