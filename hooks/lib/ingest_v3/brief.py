@@ -7,7 +7,19 @@ from .common import dump_json, load_json, norm_ws, read_text
 from .schema import load_schema, validate
 from .wiki import has_category, norm_page, page_class
 
-ROOT_FILES = ("index.md", "llake/index.md", "log.md", "llake/log.md")
+ROOT_NAMES = ("index.md", "log.md")
+
+
+def _is_root_file(raw):
+    """True for the project's root index/log in any spelling (absolute, ./, llake/, wiki/)."""
+    p = raw.strip().strip("`").strip().replace("\\", "/")
+    if "/llake/" in p:
+        p = p[p.rindex("/llake/") + len("/llake/"):]
+    for prefix in ("./", "llake/"):
+        if p.startswith(prefix):
+            p = p[len(prefix):]
+    parts = p.split("/")
+    return parts[-1] in ROOT_NAMES and len(parts) <= 2
 
 
 class InvalidBrief(Exception):
@@ -21,27 +33,29 @@ def _entries(brief_dir, errors, warnings):
     out = []
     for path in sorted(glob.glob(os.path.join(brief_dir, "pages", "*.json"))):
         name = os.path.basename(path)
+        # A recall failure never fails the run (spec section 6): its problems are warnings.
+        problems = warnings if name.startswith("recall-") else errors
         doc = load_json(path, None)
         if doc is None:
-            errors.append("{}: not valid JSON".format(name))
+            problems.append("{}: not valid JSON".format(name))
             continue
         items = doc if isinstance(doc, list) else [doc]
         for i, d in enumerate(items):
             where = "{}[{}]".format(name, i) if isinstance(doc, list) else name
             errs = validate(d, schema)
             if errs:
-                errors.extend("{}: {}".format(where, e) for e in errs)
+                problems.extend("{}: {}".format(where, e) for e in errs)
                 continue
             raw = d["path"].strip().strip("`")
-            if raw in ROOT_FILES:
+            if _is_root_file(raw):
                 warnings.append("{}: dropped {} (out of scope)".format(where, raw))
                 continue
             page = norm_page(raw)
             if not page:
-                errors.append("{}: bad path {!r}".format(where, raw))
+                problems.append("{}: bad path {!r}".format(where, raw))
                 continue
             if d.get("kind") == "new" and not (d.get("title") and d.get("description")):
-                errors.append("{}: a new page needs title and description".format(where))
+                problems.append("{}: a new page needs title and description".format(where))
                 continue
             claims = [{"quote": str(c["quote"]).strip(), "head": str(c["head"]).strip(), "severity": c["severity"]}
                       for c in d["stale"]]

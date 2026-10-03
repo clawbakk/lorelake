@@ -170,3 +170,26 @@ def test_recall_files_and_single_object_files_are_read(tmp_path, llake):
                                         stale=[{"quote": "can hang", "head": "h", "severity": "minor"}]))})
     b = brief.assemble(str(d), str(llake), "h")
     assert {p["page"] for p in b["pages"]} == {"wiki/arch/client.md", "wiki/arch/cache.md", "wiki/gotchas/retry.md"}
+
+
+@pytest.mark.parametrize("spelling", ["/abs/proj/llake/index.md", "./llake/index.md", "llake/index.md",
+                                      "wiki/index.md", "/abs/proj/llake/wiki/index.md", "`./llake/log.md`"])
+def test_root_file_spellings_are_dropped_not_invalid(tmp_path, llake, spelling):
+    d = agent_dir(tmp_path, [entry(), entry(path=spelling)])
+    b = brief.assemble(str(d), str(llake), "h")
+    assert [p["page"] for p in b["pages"]] == ["wiki/arch/client.md"]
+    assert len(load_json(str(d / "brief-report.json"))["warnings"]) == 1
+
+
+def test_recall_file_errors_never_invalidate(tmp_path, llake):
+    bad_path = entry(path="not/a/page.txt/../x")
+    bad_new = entry(path="llake/wiki/arch/limits.md", kind="new", stale=[])
+    good = entry(path="llake/wiki/arch/cache.md", severity="minor",
+                 stale=[{"quote": "Also calls", "head": "h", "severity": "minor"}])
+    d = agent_dir(tmp_path, [entry()], raw_files={
+        "recall-1.json": json.dumps([bad_path, bad_new, {"path": "x"}, good]),
+        "recall-2.json": "{oops"})
+    b = brief.assemble(str(d), str(llake), "h")
+    assert {p["page"] for p in b["pages"]} == {"wiki/arch/client.md", "wiki/arch/cache.md"}
+    report = load_json(str(d / "brief-report.json"))
+    assert report["errors"] == [] and len(report["warnings"]) >= 4
