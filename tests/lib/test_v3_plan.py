@@ -125,3 +125,26 @@ def test_run_state_roundtrip_and_ledger(tmp_path):
     assert again.ledger["stages"][0]["deniedPaths"] == ["/p/llake/x.md"]
     assert again.journal["owned"] == ["wiki/a/x.md"] and again.journal["finalized"] is False
     assert again.abs("wiki/a/x.md") == str(tmp_path / "llake" / "wiki/a/x.md")
+
+
+def test_recovery_without_manifest_keeps_existing_page_and_run_unrecovered(tmp_path):
+    llake = tmp_path / "llake"
+    write(llake, "wiki/a/x.md", "precious\n")
+    dead = dead_run(llake, "dead-run", {})
+    (dead / "bundles" / "b01" / "snapshot" / "manifest.json").unlink()
+    assert plan.recover_dead_runs(str(llake)) == []
+    assert (llake / "wiki/a/x.md").read_text() == "precious\n"
+    j = load_json(str(dead / "run.json"))
+    assert not j.get("recovered") and "wiki/a/x.md" in j["inFlight"]
+
+
+def test_recovery_with_missing_snapshot_copy_leaves_page_and_run_unrecovered(tmp_path):
+    llake = tmp_path / "llake"
+    write(llake, "wiki/a/x.md", "half written\n")
+    dead = dead_run(llake, "dead-run", {})
+    (dead / "bundles" / "b01" / "snapshot" / "wiki/a/x.md").unlink()
+    assert plan.recover_dead_runs(str(llake)) == []
+    assert (llake / "wiki/a/x.md").read_text() == "half written\n"
+    j = load_json(str(dead / "run.json"))
+    assert not j.get("recovered") and "wiki/a/x.md" in j["inFlight"]
+    assert "wiki/a/x.md" in j["unrecovered"]

@@ -82,18 +82,28 @@ def recover_dead_runs(llake_root, exclude_dir=None):
         j = load_json(jp, None)
         if not isinstance(j, dict) or j.get("finalized") or j.get("aborted") or not j.get("inFlight"):
             continue
+        remaining = {}
         for page, snap in sorted(j["inFlight"].items()):
             if not str(page).startswith("wiki/") or ".." in str(page).split("/"):
                 continue
-            manifest = load_json(os.path.join(snap, "manifest.json"), {}) or {}
+            manifest = load_json(os.path.join(snap, "manifest.json"), None)
+            existed = manifest.get(page) if isinstance(manifest, dict) else None
             dst = os.path.join(llake_root, page)
             copy = os.path.join(snap, page)
-            if manifest.get(page) and os.path.exists(copy):
+            if existed is True and os.path.exists(copy):
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.copy2(copy, dst)
-            elif not manifest.get(page) and os.path.exists(dst):
-                os.remove(dst)
-        j["inFlight"] = {}
+            elif existed is False:  # only pages the dead run created are ever deleted
+                if os.path.exists(dst):
+                    os.remove(dst)
+            else:  # manifest missing/silent, or the snapshot copy is gone: cannot restore safely
+                remaining[page] = snap
+        j["inFlight"] = remaining
+        if remaining:
+            j["unrecovered"] = sorted(remaining)
+            dump_json(jp, j)
+            continue
+        j.pop("unrecovered", None)
         j["recovered"] = True
         dump_json(jp, j)
         recovered.append(aid)
