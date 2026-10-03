@@ -320,7 +320,7 @@ Subagents and the orchestrator share the same write surface. Include the restric
 
 - `Read`, `Glob`, `Grep` — survey the codebase and the existing LoreLake.
 - `Bash` — `git rev-parse HEAD`, light shell utilities. **Not** used to spawn detached agents.
-- `Write`, `Edit` — write `log.md`, `index.md`, `last-ingest-sha`, category index files; fix up individual wiki pages during the consistency pass.
+- `Write`, `Edit` — write `log.md`, `index.md`, `last-ingest-sha`, `ingest-gaps.json`, category index files; fix up individual wiki pages during the consistency pass.
 - `Task` — dispatch subagents for per-scope wiki writing and for focused fixes during Phase 5.
 - `AskUserQuestion` — the Phase 1 resume-or-restart choice when a partial state is detected.
 
