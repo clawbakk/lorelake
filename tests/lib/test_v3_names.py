@@ -114,3 +114,35 @@ def test_write_inputs_and_empty_inputs(tmp_path):
     names.write_empty_inputs(str(empty))
     assert json.loads((empty / "names.json").read_text())["removed"] == []
     assert (empty / "patches").is_dir()
+
+
+def test_changed_ranges_survives_deleted_dashdash_line(tmp_path):
+    base_sql = "-- comment one\n" + "".join("select {};\n".format(i) for i in range(2, 30))
+    head_sql = base_sql.split("\n", 1)[1].replace("select 20;", "select 99;")
+    repo = make_project(tmp_path, src={"src/m.sql": base_sql})
+    base = git(repo, "rev-parse", "HEAD").strip()
+    head = commit(repo, {"src/m.sql": head_sql}, "edit")
+    ranges = names.changed_ranges(str(repo), base, head, ["src/"])
+    assert (1, 1) in ranges["src/m.sql"]
+    assert any(a <= 20 <= b for a, b in ranges["src/m.sql"])
+
+
+def test_name_pattern_sentence_end_and_longer_names():
+    p = names.name_pattern("old_helper.py")
+    assert p.search("Retry logic lives in old_helper.py.")
+    q = names.name_pattern("config.retry.limit")
+    assert q.search("Set config.retry.limit.")
+    assert q.search("Set config.retry.limit, then go")
+    assert not q.search("config.retry.limits")
+    assert not q.search("config.retry.limit.x")
+    assert not q.search("config.retry.limit-x")
+
+
+def test_non_ascii_path_is_not_skipped(tmp_path):
+    repo = make_project(tmp_path, src={"src/a.py": "x = uniqueNameHere\n",
+                                       "src/café.py": "y = uniqueNameHere\n"})
+    base = git(repo, "rev-parse", "HEAD").strip()
+    head = commit(repo, {"src/a.py": "x = 1\n"}, "drop from a.py")
+    assert "uniqueNameHere" not in names.derive(str(repo), base, head, ["src/"])["removed"]
+    head2 = commit(repo, {"src/café.py": "y = 2\n"}, "edit cafe")
+    assert "src/café.py" in names.changed_ranges(str(repo), head, head2, ["src/"])

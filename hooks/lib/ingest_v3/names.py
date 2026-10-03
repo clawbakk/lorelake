@@ -26,7 +26,7 @@ NO_HITS_LEAD = "(no wiki page names a removed name in this range)"
 
 
 def tree_text(repo, sha, include):
-    files = [f for f in git(repo, "ls-tree", "-r", "--name-only", sha, "--", *include).splitlines() if f]
+    files = [f for f in git(repo, "-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", sha, "--", *include).splitlines() if f]
     if not files:
         return "", []
     proc = subprocess.run(["git", "-C", str(repo), "cat-file", "--batch"],
@@ -58,7 +58,8 @@ def identifier_shaped(t):
 def name_pattern(name):
     if IDENT.fullmatch(name):
         return re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])")
-    return re.compile(r"(?<!{cb})".format(cb=CB) + re.escape(name) + r"(?!{cb})".format(cb=CB))
+    # a trailing `.` not followed by a word char is a sentence end, not part of a longer name
+    return re.compile(r"(?<!{cb})".format(cb=CB) + re.escape(name) + r"(?![A-Za-z0-9_\-]|\.[A-Za-z0-9_])")
 
 
 def _diff_lines(repo, base, head, include):
@@ -126,7 +127,7 @@ def derive(repo, base, head, include):
     added = sorted(t for t in a_simple | a_comp if absent(t, base_counts, base_text))
     head_basenames = {os.path.basename(f) for f in head_files}
     files = set()
-    for line in git(repo, "diff", "--name-status", "-M", base, head, "--", *include).splitlines():
+    for line in git(repo, "-c", "core.quotePath=false", "diff", "--name-status", "-M", base, head, "--", *include).splitlines():
         parts = line.split("\t")
         if len(parts) >= 2 and (parts[0] == "D" or parts[0].startswith("R")):
             bn = os.path.basename(parts[1])
@@ -177,15 +178,18 @@ def hit_leads(hits):
 
 
 def changed_ranges(repo, base, head, include):
-    out, cur = {}, None
-    for line in git(repo, "diff", "-U0", "-M", base, head, "--", *include).splitlines():
-        if line.startswith("--- "):
-            cur = line[6:] if line.startswith("--- a/") else None
-        elif cur and line.startswith("@@"):
+    out, cur, in_hunk = {}, None, False
+    for line in git(repo, "-c", "core.quotePath=false", "diff", "-U0", "-M", base, head, "--", *include).splitlines():
+        if line.startswith("diff --git"):
+            cur, in_hunk = None, False
+        elif line.startswith("@@"):
+            in_hunk = True
             m = HUNK.match(line)
-            if m and int(m.group(2) or 1) > 0:
+            if cur and m and int(m.group(2) or 1) > 0:
                 a = int(m.group(1))
                 out.setdefault(cur, []).append((a, a + int(m.group(2) or 1) - 1))
+        elif not in_hunk and line.startswith("--- "):
+            cur = line[6:] if line.startswith("--- a/") else None
     return out
 
 
