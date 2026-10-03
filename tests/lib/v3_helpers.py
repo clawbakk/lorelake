@@ -90,3 +90,10 @@ def make_project(tmp_path, src=None, pages=None, v3=None, include=("src/",)):
     write(repo, "llake/last-ingest-sha", sha + "\n")
     (repo / "llake" / ".state").mkdir(parents=True, exist_ok=True)
     return repo
+
+
+class Cfg(dict):
+    """A plain-dict stand-in for V3Config: `.get(key)` is strict like the real one (KeyError when missing)."""
+
+    def get(self, key):
+        return self[key]
