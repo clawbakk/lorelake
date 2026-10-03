@@ -191,8 +191,11 @@ def test_restore_page_manifest_true_but_copy_missing_keeps_page(run):
 
 
 def test_revert_run_pre_copy_missing_keeps_page(run):
+    """pre/ is the source only for a path with no snapshot of its own (here a finalize write journaled
+    without a finalize snapshot); a missing pre/ copy is no evidence of absence."""
     repo, state = run
-    snapshots.snapshot(state, ["wiki/arch/x.md"], state.dir + "/s")
+    state.journal["finalizeWrites"] = ["wiki/arch/x.md"]
+    state.save()
     (repo / state.dir / "pre/wiki/arch/x.md").unlink()
     write(repo, "llake/wiki/arch/x.md", "edit\n")
     res = snapshots.revert_run(str(repo), state.dir)
@@ -266,4 +269,63 @@ def test_revert_run_restores_changed_not_merely_owned(run):
     res = snapshots.revert_run(str(repo), state.dir)
     assert "original x" in (repo / "llake/wiki/arch/x.md").read_text()
     assert (repo / "llake/wiki/arch/z.md").read_text() == "capture edit\n"
+    assert res["unrestored"] == []
+
+
+def test_revert_run_restores_each_page_from_its_own_snapshot_keeping_concurrent_capture_writes(run):
+    """A capture write that landed after the pre-run copy but before the writer's snapshot is not the
+    run's write: the kill revert restores the bundle snapshot, never pre/ (design §12 deviation 1)."""
+    repo, state = run
+    write(repo, "llake/wiki/arch/x.md", "capture edit of x\n")
+    write(repo, "llake/wiki/arch/new.md", "capture created new\n")
+    dest = state.dir + "/bundles/b01/snapshot"
+    snapshots.snapshot(state, ["wiki/arch/x.md", "wiki/arch/new.md"], dest)
+    write(repo, "llake/wiki/arch/x.md", "writer edit of x\n")
+    write(repo, "llake/wiki/arch/new.md", "writer edit of new\n")
+    snapshots.settle(state, ["wiki/arch/x.md", "wiki/arch/new.md"])
+    res = snapshots.revert_run(str(repo), state.dir)
+    assert (repo / "llake/wiki/arch/x.md").read_text() == "capture edit of x\n"
+    assert (repo / "llake/wiki/arch/new.md").read_text() == "capture created new\n"
+    assert res["unrestored"] == [] and RunState(repo, state.dir).journal["aborted"] is True
+
+
+def test_settle_keeps_the_first_snapshot_dir_of_a_changed_page(run):
+    """A fixer's later settle must not move a page's revert point to its post-write state."""
+    repo, state = run
+    snapshots.snapshot(state, ["wiki/arch/x.md"], state.dir + "/s")
+    write(repo, "llake/wiki/arch/x.md", "writer edit\n")
+    snapshots.settle(state, ["wiki/arch/x.md"])
+    snapshots.snapshot(state, ["wiki/arch/x.md"], state.dir + "/fix")
+    write(repo, "llake/wiki/arch/x.md", "fixer edit\n")
+    snapshots.settle(state, ["wiki/arch/x.md"])
+    assert state.journal["changedFrom"] == {"wiki/arch/x.md": state.dir + "/s"}
+    snapshots.revert_run(str(repo), state.dir)
+    assert "original x" in (repo / "llake/wiki/arch/x.md").read_text()
+
+
+def test_revert_run_of_a_fixer_in_flight_undoes_the_writer_edit_too(run):
+    repo, state = run
+    snapshots.snapshot(state, ["wiki/arch/x.md"], state.dir + "/s")
+    write(repo, "llake/wiki/arch/x.md", "writer edit\n")
+    snapshots.settle(state, ["wiki/arch/x.md"])
+    snapshots.snapshot(state, ["wiki/arch/x.md"], state.dir + "/fix")
+    write(repo, "llake/wiki/arch/x.md", "fixer half-edit\n")
+    res = snapshots.revert_run(str(repo), state.dir)
+    assert "original x" in (repo / "llake/wiki/arch/x.md").read_text()
+    assert res["unrestored"] == [] and RunState(repo, state.dir).journal["inFlight"] == {}
+
+
+def test_revert_run_finalize_write_restores_its_finalize_snapshot_keeping_a_capture_index_row(run):
+    from ingest_v3 import finalize
+    repo, state = run
+    idx = "wiki/arch/arch.md"
+    with_row = (repo / "llake" / idx).read_text() + "| [[decision]] | added by capture |\n"
+    write(repo, "llake/" + idx, with_row)
+    finalize._will_write(state)(idx)
+    write(repo, "llake/" + idx, with_row.replace("| x |", "| x rewritten |"))
+    finalize._will_write(state)("ingest-gaps.json")
+    write(repo, "llake/ingest-gaps.json", "{}\n")
+    res = snapshots.revert_run(str(repo), state.dir)
+    assert (repo / "llake" / idx).read_text() == with_row
+    assert not (repo / "llake/ingest-gaps.json").exists()
     assert res["unrestored"] == []

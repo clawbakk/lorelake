@@ -12,6 +12,7 @@ from .common import dump_json, load_json, read_text, write_text
 from .state import RunState
 
 PRE = "pre"
+FINALIZE_SNAP = "finalize-snapshot"
 
 
 def _manifest(llake_root):
@@ -114,13 +115,36 @@ def revert(state, pages, dest):
 
 
 def settle(state, pages):
-    """Keep the edits; remember which pages the run really changed (revert_run restores only those)."""
+    """Keep the edits; remember which pages the run really changed (revert_run restores only those) and the
+    snapshot taken before the run first changed each one (`changedFrom`): that snapshot, not pre/, is the
+    page's revert point, so a concurrent writer's edit that landed before it survives a kill. A later settle
+    (a fixer's) never moves it."""
     changed = state.journal.setdefault("changed", [])
+    changed_from = state.journal.setdefault("changedFrom", {})
     for p in pages:
         dest = state.journal["inFlight"].pop(p, None)
         if dest is not None and p not in changed and changed_since(state, p, dest):
             changed.append(p)
+            changed_from.setdefault(p, dest)
     state.save()
+
+
+def snapshot_finalize_write(state, rel):
+    """Copy llake/<rel> as it stands just before finalize first writes it (manifest False when absent), so
+    the kill revert restores that state rather than pre/: a row a concurrent writer added to an index during
+    the run survives. Only the first copy of a file counts. Not a page snapshot: no inFlight, no owned."""
+    dest = os.path.join(state.dir, FINALIZE_SNAP)
+    manifest = load_json(os.path.join(dest, "manifest.json"), {}) or {}
+    if rel in manifest:
+        return
+    src = state.abs(rel)
+    if os.path.exists(src):
+        os.makedirs(os.path.dirname(os.path.join(dest, rel)), exist_ok=True)
+        shutil.copy2(src, os.path.join(dest, rel))
+        manifest[rel] = True
+    else:
+        manifest[rel] = False
+    dump_json(os.path.join(dest, "manifest.json"), manifest)
 
 
 def changed_since(state, page, dest):
@@ -191,8 +215,11 @@ def revert_out_of_surface(state, stage, inside, outside):
 def revert_run(project_root, agent_dir):
     """Kill path (cursor-table row 9): undo what this run's writers changed under llake/; no-op once finalized.
 
-    Restores inFlight, changed and finalizeWrites pages. Anything without evidence (missing copy/manifest) is
-    left alone, reported as unrestored and keeps the run un-aborted so dead-run recovery can retry it."""
+    Restores inFlight, changed and finalizeWrites paths, each from its own revert point: a changed page from
+    the snapshot taken before the run first changed it (journal changedFrom), an in-flight page from its
+    bundle snapshot, a file only finalize wrote from the finalize snapshot; pre/ only when a path has none of
+    these. Anything without evidence (missing copy/manifest) is left alone, reported as unrestored and keeps
+    the run un-aborted so dead-run recovery can retry it."""
     state = RunState(project_root, agent_dir)
     j = state.journal
     if j.get("finalized"):
@@ -202,6 +229,10 @@ def revert_run(project_root, agent_dir):
     pre = os.path.join(state.dir, PRE)
     before = load_json(os.path.join(state.dir, "pre-manifest.json"), None)
     in_flight = dict(j.get("inFlight") or {})
+    changed_from = dict(j.get("changedFrom") or {})
+    fin_dir = os.path.join(state.dir, FINALIZE_SNAP)
+    fin_manifest = load_json(os.path.join(fin_dir, "manifest.json"), None)
+    fin_manifest = fin_manifest if isinstance(fin_manifest, dict) else {}
     paths = set(in_flight) | set(j.get("changed") or []) | set(j.get("finalizeWrites") or [])
     paths.discard("log.md")
     if before is None and not paths:
@@ -210,10 +241,12 @@ def revert_run(project_root, agent_dir):
         return {"skipped": True, "reason": "no pre-run copy: nothing was written"}
     restored, unrestored = [], []
     for rel in sorted(paths):
-        if isinstance(before, dict):
+        # The earliest revert point wins: a writer's snapshot precedes a later fixer's in-flight one.
+        snap = changed_from.get(rel) or in_flight.get(rel) or (fin_dir if rel in fin_manifest else None)
+        if snap is not None:
+            ok = restore_page(state, rel, snap) != "unrestored"
+        elif isinstance(before, dict):
             ok = _restore_llake(state, rel, os.path.join(pre, rel) if rel in before else None)
-        elif rel in in_flight:
-            ok = restore_page(state, rel, in_flight[rel]) != "unrestored"
         else:
             ok = False
         (restored if ok else unrestored).append(rel)

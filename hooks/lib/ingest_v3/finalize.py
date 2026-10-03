@@ -10,7 +10,7 @@ import os
 import re
 import time
 
-from . import gaps, plan
+from . import gaps, plan, snapshots
 from .common import dump_json, load_json, norm_ws, read_text, write_text
 from .wiki import category_dir, frontmatter_scalars, norm_page, slug, wiki_pages
 
@@ -161,6 +161,7 @@ def log_entry(kind, base, head, today, agent_id, spent, themes, changed, created
 def _will_write(state):
     def will_write(rel):
         if rel not in state.journal["finalizeWrites"]:
+            snapshots.snapshot_finalize_write(state, rel)
             state.journal["finalizeWrites"].append(rel)
             state.save()
     return will_write
