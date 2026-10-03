@@ -7,6 +7,9 @@ from ingest_v3 import render
 TEMPLATES = [
     "ingest.v3.analysis.md.tmpl",
     "ingest.v3.recall.md.tmpl",
+    "ingest.v3.writer-shared.md.tmpl",
+    "ingest.v3.writer-bundle.md.tmpl",
+    "ingest.v3.verifier.md.tmpl",
 ]
 CASES = [(t, n) for t in TEMPLATES for n in sorted(render.placeholders(t))]
 
