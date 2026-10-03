@@ -49,3 +49,9 @@ def test_marketplace_plugin_name_matches_plugin_json():
     )
     marketplace_plugin = _load()["plugins"][0]
     assert marketplace_plugin["name"] == plugin_json["name"]
+
+
+def test_marketplace_version_matches_plugin_manifest():
+    """A version bump must touch both manifests, or /plugin update skips the release."""
+    plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
+    assert _load()["plugins"][0]["version"] == plugin["version"]

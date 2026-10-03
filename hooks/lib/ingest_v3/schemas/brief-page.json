@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "required": ["path", "severity", "reason", "stale"],
+  "properties": {
+    "path": {"type": "string", "minLength": 1},
+    "kind": {"type": "string", "enum": ["direct", "thematic", "index", "new"]},
+    "severity": {"type": "string", "enum": ["major", "minor"]},
+    "reason": {"type": "string"},
+    "themes": {"type": "array", "items": {"type": "string"}},
+    "stale": {"type": "array", "items": {"$ref": "#/$defs/claim"}},
+    "newFacts": {"type": "array", "items": {"type": "string"}},
+    "evidence": {"type": "array", "items": {"type": "string"}},
+    "title": {"type": "string"},
+    "description": {"type": "string"}
+  },
+  "$defs": {
+    "claim": {
+      "type": "object",
+      "required": ["quote", "head", "severity"],
+      "properties": {
+        "quote": {"type": "string"},
+        "head": {"type": "string", "minLength": 1},
+        "severity": {"type": "string", "enum": ["major", "minor"]}
+      }
+    }
+  }
+}

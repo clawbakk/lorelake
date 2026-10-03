@@ -22,11 +22,13 @@ llake/
 ├── log.md                      # Activity log (append-only)
 ├── config.json                 # Configuration (tracked)
 ├── last-ingest-sha             # Ingest cursor (tracked)
+├── ingest-gaps.json            # Ingest v3 gap record: pages owed, skipped ranges (tracked)
 ├── .gitattributes              # merge=union for log.md + category indexes (tracked)
 ├── .state/                     # Runtime working dir (gitignored)
 │   ├── agents/                 # Per-agent log files
 │   ├── sessions/               # Session lock + transcript extraction
 │   ├── hooks.log               # Rolled hook audit log
+│   ├── ingest-failures.json    # Ingest v3 analysis failure counter
 │   └── last-ingest-at          # Clock the ingest batching gate's age arm reads
 └── wiki/
     ├── discussions/

@@ -134,15 +134,31 @@ Do NOT record issues for keys the user's config has but the plugin's defaults no
 ### Check 8.5 — `ingest.pipeline` value
 
 Read `ingest.pipeline` from `<project>/llake/config.json`. Allowed values:
-`"legacy"` (default) and `"v2"`. Anything else is a typo or stale value
+`"legacy"` (default), `"v2"` and `"v3"`. Anything else is a typo or stale value
 from a future plugin version.
 
 - If unset → no warning (defaults to `"legacy"` via `config.default.json`).
-- If `"legacy"` or `"v2"` → no warning.
-- Otherwise → warning: `ingest.pipeline = <value>: unknown value, expected "legacy" or "v2". The post-merge hook will fall through to the legacy code path.`
+- If `"legacy"`, `"v2"` or `"v3"` → no warning.
+- Otherwise → warning: `ingest.pipeline = <value>: unknown value, expected "legacy", "v2" or "v3". The post-merge hook will fall through to the legacy code path.`
 
 This is a warning, not an error — doctor still reports the install as
 healthy if everything else passes.
+
+### Check 8.6 — Ingest gap record
+
+Ingest v3 records the pages it still owes in `<project>/llake/ingest-gaps.json` (committed; rewritten whole by each v3 run). If the file does not exist, record nothing: the report line reads `ABSENT`. Otherwise run:
+
+```
+python3 "$PLUGIN_ROOT/hooks/lib/ingest-v3.py" validate-gaps --llake-root "<project>/llake"
+```
+
+The first output line is the verdict:
+
+- `OK: N gaps (K major, S stuck), R skipped ranges` → no issue. Each following `STUCK:` line is a gap that failed three dispatched attempts and is no longer retried; each `RANGE:` line is a commit range ingest skipped after analysis failed on it twice. Both need a human: show each one under the report line as a warning, not an issue.
+- `INVALID: <reason>` (exit 1) → record an issue. Doctor does **not** repair this file: it is the record of what the wiki still owes, and rewriting it would forget owed pages. Read the reason (the first line, plus the indented lines that follow) before wording the issue:
+  - If every reason is `page <path> does not exist` or `quote not on the page`, this is **not corruption**. It is the expected result of a human editing or deleting wiki pages between ingest runs. Report it as "needs attention, self-heals on the next ingest run": that run drops the quote or placeholders the deleted page. No action is required of the user.
+  - If any reason is anything else (not valid JSON, a schema violation, a duplicate page, `stuck` disagreeing with `attempts`), the file is genuinely damaged. The fix is the user's: correct the file by hand, or delete it to forget every owed page (the next v3 run starts a fresh record).
+  - If the output cannot be classified (for example, the reasons are truncated or in an unfamiliar form), say so plainly in the issue and do not guess whether it will self-heal.
 
 ### Check 8 — Orphaned install plan
 
@@ -291,6 +307,8 @@ Plugin:  /absolute/path/to/plugin
 [CHECK] Stale manual entries       : NONE
 [CHECK] Config schema version      : OK (1)
 [CHECK] Config key coverage        : 2 keys missing → merging from defaults
+[CHECK] Ingest gap record          : OK (3 gaps, 1 stuck, 0 skipped ranges)
+          ! needs a human: wiki/arch/cache.md (major, cause writer-failed, 3 attempts)
 [CHECK] Orphaned install plan      : OK
 
 [FIX] Appending llake/.state/ to .gitignore           : DONE
@@ -313,6 +331,10 @@ Rules for the report:
   - `NOT WIRED (git repo present)` — no hook file, fixed by this run.
   - `EXISTING USER HOOK (LoreLake not wired)` — user picked [B] during collision; informational, not an error.
   - `DRIFTED — rewrote` — stale LoreLake shim, self-healed.
+- `[CHECK] Ingest gap record` possible values:
+  - `ABSENT` — no `llake/ingest-gaps.json` (normal unless the project runs ingest v3).
+  - `OK (N gaps, S stuck, R skipped ranges)` — valid. Each stuck gap and each skipped range follows on its own indented `! needs a human:` line.
+  - `INVALID — <reason>` — an issue, reported and never auto-fixed. When the only reasons are off-page quotes or deleted pages, say `INVALID — needs attention, self-heals on next ingest run` (a human edit, not corruption).
 - One `[FIX]` line per repair that actually ran. Skip fixes that were no-ops. If a fix failed, show `: FAILED — <reason>` and mention it in the summary.
 - Summary line always appears last. Templates:
   - All healthy: `Summary: 0 issues. LoreLake is healthy.`
@@ -332,6 +354,7 @@ The report is the whole user-visible output. Do not narrate intermediate steps, 
 - **Initial install.** If no `<project>/llake/` exists, doctor stops and directs the user to `/llake-lady`. It does not scaffold an install from nothing.
 - **Downgrading `_schemaVersion`.** If the user's config is newer than the plugin's, warn in the report and do nothing else.
 - **Creating hook entries in any settings file.** Plugin hooks are registered by the plugin manifest (`$PLUGIN_ROOT/hooks/hooks.json`); doctor never writes a new hook entry anywhere. Doctor *does* remove stale pre-migration entries from `~/.claude/settings.json` and `<project>/.claude/settings.json` — that is a one-way cleanup, not a registration channel.
+- **Repairing `llake/ingest-gaps.json`.** Doctor validates the gap record and lists stuck gaps and skipped ranges; editing or deleting it is the user's decision.
 
 ## References
 
@@ -342,3 +365,4 @@ The report is the whole user-visible output. Do not narrate intermediate steps, 
 - Root index template (used when `index.md` is missing): `templates/index.md.tmpl`.
 - Page-format rules (frontmatter, category stubs): `schema/core.md`.
 - Sibling skills: `/llake-lady` (initial install), `/llake-bootstrap` (populate wiki).
+- Gap record validator (Check 8.6): `hooks/lib/ingest-v3.py validate-gaps`.

@@ -89,6 +89,10 @@ USE_INGEST_V2=0
 if [ "$INGEST_PIPELINE" = "v2" ]; then
   USE_INGEST_V2=1
 fi
+USE_INGEST_V3=0
+if [ "$INGEST_PIPELINE" = "v3" ]; then
+  USE_INGEST_V3=1
+fi
 
 # Read ingest settings from config
 MAX_BUDGET_USD=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.maxBudgetUsd")
@@ -210,6 +214,19 @@ rm -f "$GATE_STDERR_FILE"
 
 GATE_VERDICT="${GATE_OUT%% *}"
 GATE_DETAIL="${GATE_OUT#* }"
+
+# v3 gate rule: with an open, non-stuck major gap owed in llake/ingest-gaps.json, WAIT becomes a run
+# (reason=gaps) and EMPTY becomes a gap-only run (reason=gaps-only). Legacy and v2 never read the file.
+if [ "$USE_INGEST_V3" = "1" ] && { [ "$GATE_VERDICT" = "WAIT" ] || [ "$GATE_VERDICT" = "EMPTY" ]; }; then
+  if python3 "$LIB_DIR/ingest-v3.py" owed-major --llake-root "$LLAKE_ROOT" >/dev/null 2>&1; then
+    if [ "$GATE_VERDICT" = "WAIT" ]; then
+      GATE_DETAIL="$GATE_DETAIL reason=gaps"
+    else
+      GATE_DETAIL="$GATE_DETAIL reason=gaps-only"
+    fi
+    GATE_VERDICT="RUN"
+  fi
+fi
 # Used only for log lines — carries the sanitized stderr summary alongside
 # GATE_DETAIL without changing GATE_OUT/GATE_DETAIL's "RUN reason=gate-error"
 # contract that the rest of the script (and tests) rely on.
@@ -282,6 +299,58 @@ if [ "$USE_INGEST_V2" = "1" ]; then
     disown "$BG_PID"
   fi
   hook_end "done: spawned v2 agent (range: $COMMIT_RANGE, timeout: ${V2_TIMEOUT}s, gate: $GATE_LOG_DETAIL)" "$LOG_FILE"
+  exit 0
+fi
+
+# v3 branch: the Python orchestrator owns planning, agents, finalize and the cursor. It runs under the
+# post-merge lock with a hard watchdog at the run deadline + grace; a kill reverts the run's writes.
+if [ "$USE_INGEST_V3" = "1" ]; then
+  # shellcheck source=lib/ingest-v3.sh
+  source "$LIB_DIR/ingest-v3.sh"
+  V3_TIMEOUT=$(python3 "$LIB_DIR/read-config.py" "$CONFIG_FILE" "ingest.v3.timeoutSeconds")
+  V3_WATCHDOG=$((V3_TIMEOUT + LLAKE_V3_WATCHDOG_GRACE_SECONDS))
+  V3_AGENT_ID=$(generate_agent_id)
+  V3_AGENT_DIR="$AGENTS_DIR/$V3_AGENT_ID"
+  mkdir -p "$V3_AGENT_DIR"
+  V3_AGENT_LOG="$V3_AGENT_DIR/agent.log"
+  V3_PID_FILE="$V3_AGENT_DIR/orchestrator.pid"
+  (
+    source "$LIB_DIR/agent-run.sh"
+    MY_PID=$(sh -c 'echo $PPID')
+    echo "$MY_PID" > "$V3_PID_FILE"
+    HOOKS_LOG_FILE="$LOG_FILE"
+    AGENT_LOG="$V3_AGENT_LOG"
+    CURRENT_PID_FILE="$V3_PID_FILE"
+    MAX_TIMEOUT_SEC="$V3_WATCHDOG"
+    LLAKE_AGENT_ID="$V3_AGENT_ID"
+    # Kill traps first: a TERM between taking the lock and arming them would strand the lock for the
+    # stale reclaim. Before the lock is ours the trap's release_v3_lock is a no-op (ownership check).
+    trap '_ingest_v3_on_kill user' TERM INT
+    trap '_ingest_v3_on_kill timeout' USR1
+    if ! acquire_post_merge_lock; then
+      printf "%s | %-13s | skipped: post-merge lock held; v3 agent abandoned\n" \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" >> "$LOG_FILE"
+      exit 0
+    fi
+    trap 'release_v3_lock' EXIT
+    claim_v3_lock
+    (
+      sleep "$V3_WATCHDOG"
+      if kill -0 "$MY_PID" 2>/dev/null; then kill -USR1 "$MY_PID" 2>/dev/null; fi
+    ) &
+    WATCHDOG_PID=$!
+    run_ingest_v3 "$V3_AGENT_ID" "$V3_AGENT_DIR" "$V3_AGENT_LOG" "$V3_TIMEOUT"
+    kill_tree "$WATCHDOG_PID"
+    wait "$WATCHDOG_PID" 2>/dev/null
+    rm -f "$V3_PID_FILE"
+  ) &
+  BG_PID=$!
+  if [ "${LLAKE_POST_MERGE_SYNC:-}" = "1" ]; then
+    wait "$BG_PID" 2>/dev/null
+  else
+    disown "$BG_PID"
+  fi
+  hook_end "done: spawned v3 agent (range: $COMMIT_RANGE, deadline: ${V3_TIMEOUT}s, gate: $GATE_LOG_DETAIL)" "$LOG_FILE"
   exit 0
 fi
 

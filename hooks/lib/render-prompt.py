@@ -65,6 +65,44 @@ def parse_runtime_vars(argv):
     return out
 
 
+def render_text(template, section_name, config, runtime_vars, templates_dir=None):
+    """Substitute every placeholder in `template` (single pass).
+
+    Returns (rendered, unresolved, errors): `unresolved` is the sorted list of placeholder
+    names nothing could fill; `errors` holds fallback-read diagnostics for stderr.
+    """
+    if not isinstance(config, dict):
+        config = {}
+    custom_slots = (config.get("prompts", {}) or {}).get(section_name, {}) or {}
+    unresolved = set()
+    errors = []
+
+    def resolve(match):
+        name = match.group(1)
+        fallback_path = match.group(2)
+
+        if name in runtime_vars:
+            return runtime_vars[name]
+
+        if name in custom_slots and custom_slots[name]:
+            return str(custom_slots[name])
+
+        if fallback_path:
+            resolved = Path(fallback_path)
+            if not resolved.is_absolute() and templates_dir:
+                resolved = Path(templates_dir) / fallback_path
+            try:
+                return resolved.read_text()
+            except (IOError, OSError) as exc:
+                errors.append(f"render-prompt: fallback read failed ({resolved}): {exc}")
+
+        unresolved.add(name)
+        return match.group(0)
+
+    rendered = PLACEHOLDER_RE.sub(resolve, template)
+    return rendered, sorted(unresolved), errors
+
+
 def main():
     parser = argparse.ArgumentParser(description="LoreLake prompt renderer")
     parser.add_argument("--templates-dir", default=None,
@@ -80,39 +118,14 @@ def main():
         print(f"render-prompt: cannot read template {args.template}: {e}", file=sys.stderr)
         sys.exit(2)
 
-    config = load_json(args.config)
-    section_name = template_section_name(args.template)
-    custom_slots = (config.get("prompts", {}) or {}).get(section_name, {}) or {}
-    runtime_vars = parse_runtime_vars(args.vars)
-
-    unresolved = set()
-
-    def resolve(match):
-        name = match.group(1)
-        fallback_path = match.group(2)
-
-        if name in runtime_vars:
-            return runtime_vars[name]
-
-        if name in custom_slots and custom_slots[name]:
-            return str(custom_slots[name])
-
-        if fallback_path:
-            resolved = Path(fallback_path)
-            if not resolved.is_absolute() and args.templates_dir:
-                resolved = Path(args.templates_dir) / fallback_path
-            try:
-                return resolved.read_text()
-            except (IOError, OSError) as exc:
-                print(f"render-prompt: fallback read failed ({resolved}): {exc}", file=sys.stderr)
-
-        unresolved.add(name)
-        return match.group(0)
-
-    rendered = PLACEHOLDER_RE.sub(resolve, template)
+    rendered, unresolved, errors = render_text(
+        template, template_section_name(args.template), load_json(args.config),
+        parse_runtime_vars(args.vars), args.templates_dir)
+    for line in errors:
+        print(line, file=sys.stderr)
 
     if unresolved:
-        names = ", ".join(sorted(unresolved))
+        names = ", ".join(unresolved)
         print(f"render-prompt: unresolved placeholders: {names}", file=sys.stderr)
         sys.exit(1)
 

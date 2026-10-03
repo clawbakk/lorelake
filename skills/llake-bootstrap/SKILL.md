@@ -163,7 +163,7 @@ Write surface:
 - You MAY write only the page files listed above under wiki/<cat>/.
 - You MUST NOT write to wiki/discussions/** — that namespace is owned by session-capture.
 - You MUST NOT write anywhere outside <project>/llake/wiki/.
-- You MUST NOT edit config.json, schema/**, log.md, last-ingest-sha, .state/**, or any file outside <project>/llake/.
+- You MUST NOT edit config.json, schema/**, log.md, last-ingest-sha, ingest-gaps.json, .state/**, or any file outside <project>/llake/.
 
 When done, return this JSON manifest (exactly this shape, no prose around it):
 
@@ -263,6 +263,8 @@ Under monorepo layouts, also write the group indexes (`wiki/packages/packages.md
 
 Run `git -C "$PROJECT_ROOT" rev-parse HEAD` and write the output (a single SHA, no trailing newline) to `$PROJECT_ROOT/llake/last-ingest-sha`. This is the cursor post-merge ingest uses on future merges — every commit after this SHA is the ingest agent's backlog.
 
+Then reset the ingest gap record: write `$PROJECT_ROOT/llake/ingest-gaps.json` as `{"version": 1, "asOf": "<that SHA>", "agent": "bootstrap", "date": "<YYYY-MM-DD>", "gaps": [], "ranges": []}` (2-space indented JSON, trailing newline), replacing any earlier file. A freshly bootstrapped wiki owes nothing, and an older record would point at pages bootstrap just rewrote. Ingest v3 reads this file; the other pipelines ignore it.
+
 ### Step 4 — Append the terminal `bootstrap` entry
 
 This is **last**. Its presence in `log.md` is what marks bootstrap as complete on any future invocation; its absence (with `bootstrap-task` entries present) is what marks a partial state available for resume. Writing it before the finalize steps is a bug — it would hide an incomplete run.
@@ -309,7 +311,7 @@ Subagents and the orchestrator share the same write surface. Include the restric
 | `wiki/**` — any category, including new project-specific ones created by the plan | `wiki/discussions/**` — owned exclusively by session-capture; bootstrap-generated content there would corrupt the discussion record |
 | `index.md` and category index files (`wiki/<cat>/<cat>.md`) — written in Phase 6 | `schema/**` — immutable to agents |
 | `log.md` — append-only, via `bootstrap-task`, `bootstrap-consistency`, and the terminal `bootstrap` entry | `config.json` |
-| `last-ingest-sha` — set exactly once, in Phase 6 step 3 | `.state/**` — runtime working dir |
+| `last-ingest-sha` and `ingest-gaps.json` — set exactly once, in Phase 6 step 3 | `.state/**` — runtime working dir |
 | | Anything outside `<project>/llake/` |
 
 ---
@@ -318,7 +320,7 @@ Subagents and the orchestrator share the same write surface. Include the restric
 
 - `Read`, `Glob`, `Grep` — survey the codebase and the existing LoreLake.
 - `Bash` — `git rev-parse HEAD`, light shell utilities. **Not** used to spawn detached agents.
-- `Write`, `Edit` — write `log.md`, `index.md`, `last-ingest-sha`, category index files; fix up individual wiki pages during the consistency pass.
+- `Write`, `Edit` — write `log.md`, `index.md`, `last-ingest-sha`, `ingest-gaps.json`, category index files; fix up individual wiki pages during the consistency pass.
 - `Task` — dispatch subagents for per-scope wiki writing and for focused fixes during Phase 5.
 - `AskUserQuestion` — the Phase 1 resume-or-restart choice when a partial state is detected.
 

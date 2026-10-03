@@ -61,6 +61,17 @@ The age arm reads `llake/.state/last-ingest-at`. Because `.state/` is gitignored
 - All `updated:` dates are current for modified pages.
 - `log.md` has an entry for this ingest with the commit SHA range.
 
+### Pipeline v3 (`ingest.pipeline: "v3"`)
+
+v3 replaces the single ingest agent with stages: run planning, then removed names, hit index and change leads ($0), then **analysis** (one read-only agent writes a brief of the affected pages and their stale claims), then a **recall pass** (one read-only agent looks for pages the brief missed), then brief assembly and bundling ($0), then **writers** (in parallel, one per bundle of at most `ingest.v3.bundleMaxPages` pages, default four, each allowed to edit only its own pages), then $0 checks, a **fix round** on flagged pages, and finalize. Code alone writes `updated:`, the category indexes, the log entry, the gap record and the cursor.
+
+- **Gap record** `llake/ingest-gaps.json` (tracked): the pages a run could not bring current, each with its cause and the stale claims quoted from the page, plus commit ranges skipped after analysis failed on them twice. The cursor advances over recorded gaps and the next run takes them on first. A gap that fails three dispatched attempts is stuck and needs a human; `/llake-doctor` lists it.
+- **Gate:** with an open, non-stuck major gap owed, a deferred merge runs anyway (`reason=gaps`), and a merge with no watched changes runs a gap-only pass (`reason=gaps-only`). Legacy and v2 never read the file.
+- **Cursor:** an analysis failure holds it, counted in `.state/ingest-failures.json`; after two work failures on one base the next run ingests the first half of the range, and a one-commit range is skipped and recorded as a skipped range. Writer failures, the run budget cap (`maxRunBudgetUsd`) and the run deadline (`timeoutSeconds`) do not hold it: the pages they leave become gaps.
+- **Lock and kill:** the v3 run holds the `post-merge` lock under its own PID for its whole life, so a live run is never reclaimed as stale. A killed or timed-out run reverts its writes from the page snapshots; a revert restores a page only on evidence (a saved copy, or an explicit record that the page did not exist) and never deletes a file on missing evidence.
+- **Settings:** `ingest.v3.*` in `config.json` (models, efforts, budgets, timeouts, concurrency, bundle caps, run cap, deadline). No agent gets a shell; each writer's write surface is enforced at the permission level and checked again after the write.
+- **Review:** each run's agent dir under `.state/agents/<id>/` keeps the brief, the bundles, page snapshots, every agent's stream and `report.md`.
+
 ## Session capture
 
 **Trigger:** Automated — Claude Code `SessionEnd` hook extracts the session transcript and spawns a triage→capture two-pass agent.

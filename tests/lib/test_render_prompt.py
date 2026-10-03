@@ -175,3 +175,15 @@ def test_fallback_path_not_found_reports_diagnostic(tmp_path):
     assert rc != 0
     assert "EXAMPLES" in err
     assert "fallback read failed" in err
+
+
+def test_render_text_function_reports_unresolved_and_keeps_literals():
+    import importlib.util
+    script = Path(__file__).resolve().parents[2] / "hooks" / "lib" / "render-prompt.py"
+    spec = importlib.util.spec_from_file_location("render_prompt_mod", str(script))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    out, unresolved, errors = mod.render_text("A {{X}} B {{Y}}", "ingest", {}, {"X": "{{Z}}"})
+    assert out == "A {{Z}} B {{Y}}"
+    assert unresolved == ["Y"]
+    assert errors == []
