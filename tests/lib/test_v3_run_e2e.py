@@ -19,7 +19,7 @@ BRIEF = json.dumps([{"path": "llake/wiki/arch/client.md", "kind": "direct", "sev
                                                              "severity": "major"}]}])
 STUB_VARS = ("V3_STUB_BRIEF", "V3_STUB_RECALL", "V3_STUB_FAIL", "V3_STUB_INFRA", "V3_STUB_SLEEP", "V3_STUB_MARK",
              "V3_STUB_IGNORE_TERM", "V3_STUB_DECLARE", "V3_STUB_COST", "V3_STUB_OTHER_STALE",
-             "LLAKE_V3_STOP_AFTER", "LLAKE_V3_FROZEN_BRIEF")
+             "V3_STUB_RECALL_CLOBBER", "V3_STUB_RECALL_EXTRA", "LLAKE_V3_STOP_AFTER", "LLAKE_V3_FROZEN_BRIEF")
 
 
 @pytest.fixture
@@ -385,3 +385,29 @@ def test_report_failure_after_finalize_still_completes(tmp_path, stages, monkeyp
     assert cursor(repo) == shas[-1]
     assert "completed: agent run-1 v3 range" in hooks(repo) and "held" not in hooks(repo)
     assert "report.md not written" in agent_log(repo)
+
+
+def test_recall_clobbering_an_analysis_file_cannot_fail_the_run(tmp_path, stages, monkeypatch):
+    repo, base, shas = project(tmp_path)
+    monkeypatch.setenv("V3_STUB_BRIEF", BRIEF)
+    monkeypatch.setenv("V3_STUB_RECALL_CLOBBER", "1")
+    assert go(repo) == 0
+    assert cursor(repo) == shas[-1]
+    assert stages() == ["analysis", "recall", "writer-b01"]
+    assert (repo / "llake/.state/agents/run-1/brief/pages/batch-1.json").read_text() == BRIEF
+    assert "the corrected statement" in (repo / "llake/wiki/arch/client.md").read_text()
+    assert "recall changed analysis file batch-1.json: restored" in agent_log(repo)
+
+
+def test_recall_file_not_named_recall_is_set_aside(tmp_path, stages, monkeypatch):
+    # schema-valid, but a new page without title and description: assemble rejects it as an analysis error
+    repo, base, shas = project(tmp_path)
+    monkeypatch.setenv("V3_STUB_BRIEF", BRIEF)
+    monkeypatch.setenv("V3_STUB_RECALL_EXTRA", json.dumps([{"path": "llake/wiki/arch/fresh.md", "kind": "new",
+                                                            "severity": "minor", "reason": "r", "stale": []}]))
+    assert go(repo) == 0
+    assert cursor(repo) == shas[-1]
+    assert stages() == ["analysis", "recall", "writer-b01"]
+    assert (repo / "llake/.state/agents/run-1/brief/rejected-recall/extra.json").exists()
+    assert not (repo / "llake/.state/agents/run-1/brief/pages/extra.json").exists()
+    assert "recall file extra.json set aside (not named recall-*)" in agent_log(repo)

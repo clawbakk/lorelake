@@ -3,7 +3,9 @@
 
   analysis    writes brief/themes.json and, from V3_STUB_BRIEF (raw JSON text), brief/pages/batch-1.json.
               The brief dir comes from the `Edit(//<dir>/**)` allow rule.
-  recall      writes brief/pages/recall-1.json from V3_STUB_RECALL (raw text) when set.
+  recall      writes brief/pages/recall-1.json from V3_STUB_RECALL (raw text) when set;
+              V3_STUB_RECALL_CLOBBER=1 truncates analysis's batch-1.json to an invalid fragment;
+              V3_STUB_RECALL_EXTRA (raw text) writes brief/pages/extra.json.
   writer-* /  for each owned page (`Edit(//<abs path>)` rules) replaces every quoted brief claim
   fixer-*     (`page says "<quote>" — head`) with "the corrected statement" and reports corrected;
               creates a missing page. V3_STUB_DECLARE=1: leaves pages and declares every claim instead.
@@ -97,6 +99,12 @@ elif stage == "recall":
     if os.environ.get("V3_STUB_RECALL"):
         with open(os.path.join(pages_dir, "recall-1.json"), "w") as fh:
             fh.write(os.environ["V3_STUB_RECALL"])
+    if os.environ.get("V3_STUB_RECALL_CLOBBER") == "1":
+        with open(os.path.join(pages_dir, "batch-1.json"), "w") as fh:
+            fh.write('[{"path": "llake/wiki/arch/client.md", ')
+    if os.environ.get("V3_STUB_RECALL_EXTRA"):
+        with open(os.path.join(pages_dir, "extra.json"), "w") as fh:
+            fh.write(os.environ["V3_STUB_RECALL_EXTRA"])
     finish()
 elif stage.startswith(("writer", "fixer")):
     owned = [r for r in rules if not r.endswith("/**")]

@@ -114,17 +114,41 @@ def _recall(state, cfg, deadline, log):
         return
     pages_dir = os.path.join(state.dir, "brief", "pages")
     os.makedirs(pages_dir, exist_ok=True)
-    before = set(os.listdir(pages_dir))
+    before = {}
+    for name in os.listdir(pages_dir):
+        if os.path.isfile(os.path.join(pages_dir, name)):
+            with open(os.path.join(pages_dir, name), "rb") as fh:
+                before[name] = fh.read()
     prompt = stage.recall_prompt(state.project, state.llake, state.dir)
     s = _spawn_and_wait(state, cfg, "recall", cfg.get("recallPass"), cfg.get("recallEffort"), budget,
                         "recallTimeoutSeconds", prompt, pages_dir, deadline)
-    rejected = os.path.join(state.dir, "brief", "rejected-recall")
-    for name in sorted(set(os.listdir(pages_dir)) - before):
+    # Recall may only add recall-*.json files: the files analysis wrote are restored byte for byte, and any
+    # other new file is set aside (assemble treats only recall-* problems as warnings).
+    for name, data in sorted(before.items()):
         path = os.path.join(pages_dir, name)
-        if s["class"] != "none" or not _valid_page_file(path):
-            os.makedirs(rejected, exist_ok=True)
-            os.replace(path, os.path.join(rejected, name))
-            log.line("recall file {} set aside ({})".format(name, s["class"] if s["class"] != "none" else "invalid"))
+        try:
+            with open(path, "rb") as fh:
+                same = fh.read() == data
+        except OSError:
+            same = False
+        if not same:
+            with open(path, "wb") as fh:
+                fh.write(data)
+            log.line("recall changed analysis file {}: restored".format(name))
+    rejected = os.path.join(state.dir, "brief", "rejected-recall")
+    for name in sorted(set(os.listdir(pages_dir)) - set(before)):
+        path = os.path.join(pages_dir, name)
+        if not name.startswith("recall-"):
+            why = "not named recall-*"
+        elif s["class"] != "none":
+            why = s["class"]
+        elif not _valid_page_file(path):
+            why = "invalid"
+        else:
+            continue
+        os.makedirs(rejected, exist_ok=True)
+        os.replace(path, os.path.join(rejected, name))
+        log.line("recall file {} set aside ({})".format(name, why))
     log.line("recall: {} (${:.2f}); the brief stands either way".format(s["class"], s["cost_usd"]))
 
 
