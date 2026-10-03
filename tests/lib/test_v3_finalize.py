@@ -339,3 +339,39 @@ def test_record_skip_without_leads_records_a_placeholder_lead(run):
     doc = gap_doc(repo)
     assert doc["ranges"][0]["leads"] == ["(no wiki page names a removed name in this range)"]
     assert gaps.validate(doc, str(repo / "llake")) == []
+
+
+def test_owned_page_the_run_left_alone_but_capture_edited_is_not_updated(run):
+    """updated/created come from what the run's writers changed (journal changed), not from a diff with
+    pre/: a concurrent capture edit to a page the writer left alone is not this run's update."""
+    repo, state, brief = run
+    llake = repo / "llake"
+    write(repo, "llake/" + Y, page_text("Y", "y desc by capture", "Body y stays. Capture added a line."))
+    summary = finalize.finalize(state, CFG, brief, "run-7", B, H, "range", today="2026-10-03")
+    assert summary["updated"] == [X] and summary["created"] == [NEW]
+    assert "updated: 2026-01-01" in (llake / Y).read_text()
+    assert "| [[y]] | y desc |" in (llake / IDX).read_text()
+    assert "v3 — 1 updated, 1 created" in (llake / "log.md").read_text()
+
+
+def test_page_capture_created_before_the_writer_touched_it_counts_as_updated(run):
+    repo, state, brief = run
+    cap = "wiki/arch/cap.md"
+    write(repo, "llake/" + cap, page_text("Cap", "from capture", "Captured."))
+    snap = state.dir + "/bundles/b02/snapshot"
+    snapshots.snapshot(state, [cap], snap)
+    write(repo, "llake/" + cap, page_text("Cap", "from capture", "Captured, then corrected."))
+    snapshots.settle(state, [cap])
+    summary = finalize.finalize(state, CFG, brief, "run-7", B, H, "range", today="2026-10-03")
+    assert summary["updated"] == [cap, X] and summary["created"] == [NEW]
+
+
+def test_changed_page_later_restored_to_its_snapshot_is_not_updated(run):
+    """checks can revert a written page to its snapshot (broken frontmatter): it stays in journal changed
+    but the run left no edit on it, so finalize neither stamps nor counts it."""
+    repo, state, brief = run
+    llake = repo / "llake"
+    snap = state.dir + "/bundles/b01/snapshot"
+    write(repo, "llake/" + X, (repo / snap / X).read_text())
+    summary = finalize.finalize(state, CFG, brief, "run-7", B, H, "range", today="2026-10-03")
+    assert summary["updated"] == [] and "updated: 2026-01-01" in (llake / X).read_text()

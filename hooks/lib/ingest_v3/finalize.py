@@ -50,8 +50,10 @@ def _desc(root, page):
     return frontmatter_scalars(read_text(os.path.join(root, page))).get("description", "").strip()
 
 
-def rebuild_indexes(state, changed, created, today, will_write):
+def rebuild_indexes(state, changed, created, today, will_write, prior=None):
+    """`prior` maps a changed page to the dir holding its text before the run changed it (default pre/)."""
     pre = os.path.join(state.dir, "pre")
+    prior = prior or {}
     all_pages = wiki_pages(state.llake)
     touched = []
     for cat in sorted({category_dir(p) for p in list(changed) + list(created)}):
@@ -69,7 +71,7 @@ def rebuild_indexes(state, changed, created, today, will_write):
                 page = cat + "/" + s + ".md"
                 if page in changed:
                     new_desc = _desc(state.llake, page)
-                    if new_desc and norm_ws(new_desc) != norm_ws(_desc(pre, page)):
+                    if new_desc and norm_ws(new_desc) != norm_ws(_desc(prior.get(page, pre), page)):
                         line = "| [[{}]] | {} |{}".format(s, new_desc.replace("|", "\\|"), m.group(3))
                 seen.add(s)
                 out.append(line)
@@ -202,24 +204,30 @@ def finalize(state, cfg, brief, agent_id, base, head, kind, today=None, now=None
     before = load_json(os.path.join(state.dir, "pre-manifest.json"), {}) or {}
     will_write = _will_write(state)
 
-    changed, created = [], []
-    for p in sorted(set(state.journal.get("owned") or [])):
+    # What this run's writers and fixers changed (journal changed), each judged against the snapshot taken
+    # before the run first changed it: a concurrent capture edit is neither an update nor a creation.
+    changed_from = state.journal.get("changedFrom") or {}
+    changed, created, prior = [], [], {}
+    for p in sorted(set(state.journal.get("changed") or [])):
         path = state.abs(p)
         if norm_page(p) != p or not os.path.exists(path):
             continue
-        text = read_text(path)
-        if p not in before:
-            created.append(p)
-        elif text != read_text(os.path.join(pre, p)):
-            changed.append(p)
+        snap = changed_from.get(p)
+        manifest = load_json(os.path.join(snap, "manifest.json"), None) if snap else None
+        if isinstance(manifest, dict) and p in manifest:
+            existed, prior[p] = manifest[p] is True, snap
         else:
-            continue
+            existed, prior[p] = p in before, pre
+        text = read_text(path)
+        if existed and text == read_text(os.path.join(prior[p], p)):
+            continue  # restored to its revert point since (e.g. checks undid a broken write)
+        (changed if existed else created).append(p)
         new = set_updated(text, today)
         if new != text:
             will_write(p)
             write_text(path, new)
 
-    indexes = rebuild_indexes(state, changed, created, today, will_write)
+    indexes = rebuild_indexes(state, changed, created, today, will_write, prior)
 
     checks = load_json(os.path.join(state.dir, "checks.json"), {}) or {}
     doc, resolved, notes = gaps.next_record(
