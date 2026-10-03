@@ -81,3 +81,26 @@ def test_stage_inputs_survives_non_utf8_and_binary_sources(tmp_path):
     assert "src__a.py.patch" in staged["patches"]
     assert "src__blob.bin.patch" in staged["patches"]
     assert "x = " in (agent / "inputs" / "patches" / "src__a.py.patch").read_text(encoding="utf-8")
+
+
+def test_renamed_file_patch_shows_the_edit_not_a_whole_file_add(tmp_path):
+    body = "".join("line {}\n".format(i) for i in range(30))
+    repo = make_project(tmp_path, src={"src/old.py": body})
+    base = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "mv", "src/old.py", "src/new.py")
+    head = commit(repo, {"src/new.py": body.replace("line 7\n", "line SEVEN\n")}, "rename and edit")
+    out = stage.stage_patches(str(repo), base, head, ["src/"], str(tmp_path / "p"))
+    assert out == ["src__new.py.patch"]
+    text = (tmp_path / "p" / out[0]).read_text()
+    assert "rename from src/old.py" in text and "-line 7" in text and "+line SEVEN" in text
+    assert "new file mode" not in text
+
+
+def test_glob_characters_in_a_path_match_only_that_file(tmp_path):
+    repo = make_project(tmp_path, src={"src/[id].tsx": "a\n", "src/i.tsx": "b\n"})
+    base = git(repo, "rev-parse", "HEAD").strip()
+    head = commit(repo, {"src/[id].tsx": "a2\n", "src/i.tsx": "b2\n"}, "both")
+    out = stage.stage_patches(str(repo), base, head, ["src/"], str(tmp_path / "p"))
+    text = (tmp_path / "p" / "src__[id].tsx.patch").read_text()
+    assert "+a2" in text and "b2" not in text
+    assert "b2" in (tmp_path / "p" / "src__i.tsx.patch").read_text()

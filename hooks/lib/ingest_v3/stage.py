@@ -13,15 +13,30 @@ def patch_stem(path):
 
 
 def _changed_files(repo, base, head, include):
-    raw = git(repo, "-c", "core.quotePath=false", "diff", "--name-only", "-z", "-M", base, head, "--", *include)
-    return [f for f in raw.split("\0") if f]
+    """[(old_path_or_None, path)] for each changed file; old_path is set for renames and copies."""
+    parts = git(repo, "-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", base, head,
+                "--", *include).split("\0")
+    out, i = [], 0
+    while i < len(parts) and parts[i]:
+        if parts[i][0] in "RC" and i + 2 < len(parts):
+            out.append((parts[i + 1], parts[i + 2]))
+            i += 3
+        else:
+            out.append((None, parts[i + 1]))
+            i += 2
+    return out
+
+
+def _literal(path):
+    return ":(literal)" + path
 
 
 def stage_patches(repo, base, head, include, dest, max_bytes=PATCH_MAX_BYTES):
     os.makedirs(dest, exist_ok=True)
     out = []
-    for f in _changed_files(repo, base, head, include):
-        patch = git(repo, "-c", "core.quotePath=false", "diff", "-M", base, head, "--", f)
+    for old, f in _changed_files(repo, base, head, include):
+        paths = [_literal(p) for p in ([old] if old else []) + [f]]
+        patch = git(repo, "-c", "core.quotePath=false", "diff", "-M", base, head, "--", *paths)
         stem = patch_stem(f)
         if len(patch.encode("utf-8")) <= max_bytes:
             write_text(os.path.join(dest, stem + ".patch"), patch)
