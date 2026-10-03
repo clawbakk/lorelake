@@ -328,7 +328,8 @@ if [ "$USE_INGEST_V3" = "1" ]; then
         "$(date '+%Y-%m-%d %H:%M:%S')" "agent-done" >> "$LOG_FILE"
       exit 0
     fi
-    trap 'release_post_merge_lock' EXIT
+    claim_v3_lock
+    trap 'release_v3_lock' EXIT
     trap '_ingest_v3_on_kill user' TERM INT
     trap '_ingest_v3_on_kill timeout' USR1
     (

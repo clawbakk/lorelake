@@ -129,6 +129,35 @@ test_v3_range_run() {
   assert_file_contains "range_gap_record" "$proj/llake/ingest-gaps.json" '"gaps": []'
   assert_file_contains "range_spawned" "$proj/llake/.state/hooks.log" "done: spawned v3 agent"
   assert_file_contains "range_completed" "$proj/llake/.state/hooks.log" "completed: agent"
+  assert_eq "range_lock_released" "no" "$([ -d "$proj/llake/.state/post-merge.lock.d" ] && echo yes || echo no)"
+}
+
+# A live run's lock must never read as stale, however old the lock dir is: the hook that took it
+# exits at once (owner.pid must name the run's own subshell, which lives for the whole run).
+test_v3_live_lock_not_reclaimed_when_aged() {
+  local proj; proj=$(new_project v3); TMP_PROJECTS+=("$proj")
+  rename_loader "$proj"
+  local lockdir="$proj/llake/.state/post-merge.lock.d"
+  local mark="$proj/writer-started"
+  (cd "$proj" && env PATH="$STUB_BIN:$PATH" V3_STUB_BRIEF="$V3_BRIEF" V3_STUB_SLEEP="writer-b01:60" \
+     V3_STUB_MARK="$mark" bash "$REPO_ROOT/hooks/post-merge.sh")
+  local i=0
+  while [ ! -f "$mark" ] && [ "$i" -lt 150 ]; do sleep 0.2; i=$((i+1)); done
+  assert_eq "aged_writer_started" "yes" "$([ -f "$mark" ] && echo yes || echo no)"
+  local pidfile; pidfile=$(ls "$proj"/llake/.state/agents/*/orchestrator.pid 2>/dev/null | head -1)
+  local pid; pid=$(cat "$pidfile" 2>/dev/null)
+  assert_eq "aged_owner_is_run" "$pid" "$(cat "$lockdir/owner.pid" 2>/dev/null)"
+  # Age the lock dir two hours, past post-merge-lock.sh's one-hour stale threshold.
+  python3 -c 'import os, sys, time; t = time.time() - 7200; os.utime(sys.argv[1], (t, t))' "$lockdir"
+  add_src_commit "$proj" "another change"
+  run_hook "$proj"
+  assert_file_contains "aged_second_abandoned" "$proj/llake/.state/hooks.log" "v3 agent abandoned"
+  assert_file_lacks "aged_not_reclaimed" "$proj/llake/.state/hooks.log" "reclaiming stale lock"
+  assert_eq "aged_lock_kept" "$pid" "$(cat "$lockdir/owner.pid" 2>/dev/null)"
+  kill -TERM "$pid" 2>/dev/null
+  i=0
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 150 ]; do sleep 0.2; i=$((i+1)); done
+  assert_eq "aged_lock_released_on_kill" "no" "$([ -d "$lockdir" ] && echo yes || echo no)"
 }
 
 test_v3_empty_with_owed_major_runs_gap_only() {
@@ -239,6 +268,7 @@ test_legacy_ignores_gap_record
 test_v3_lock_held_abandons
 test_v3_user_kill_reverts_and_holds
 test_v3_watchdog_reverts_and_holds
+test_v3_live_lock_not_reclaimed_when_aged
 
 echo "PASS=$PASS FAIL=$FAIL"
 if [ "$FAIL" -gt 0 ]; then

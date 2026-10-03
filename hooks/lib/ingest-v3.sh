@@ -33,8 +33,25 @@ run_ingest_v3() {
   wait "$py_pid"
 }
 
+# The post-merge lock under v3. acquire_post_merge_lock records `$$`, which inside the `( … ) &` run
+# subshell is the hook's PID — and the hook exits at once, so the lock would name a dead owner and turn
+# reclaimable as stale an hour in, while the run (deadline up to ingest.v3.timeoutSeconds + grace) is
+# still working. claim_v3_lock re-records the owner as the run subshell itself ($MY_PID), live for the
+# whole run; release_v3_lock removes the lock only while that owner still holds it.
+claim_v3_lock() {
+  echo "$MY_PID" > "$(_llake_lock_dir)/owner.pid"
+}
+
+release_v3_lock() {
+  local lockdir
+  lockdir=$(_llake_lock_dir)
+  if [ -f "$lockdir/owner.pid" ] && [ "$(cat "$lockdir/owner.pid" 2>/dev/null)" = "$MY_PID" ]; then
+    rm -rf "$lockdir"
+  fi
+}
+
 # Kill trap (TERM/INT = user, USR1 = watchdog): stop every process of this run, undo its writes under
-# llake/ (never outside it), release the post-merge lock (_agent_cleanup clears the EXIT trap that
+# llake/ (never outside it), release the run's post-merge lock (_agent_cleanup clears the EXIT trap that
 # would), then log the kill and exit 143. A failing revert-run is logged and never stops the trap:
 # the lock is released and _agent_cleanup runs regardless (the next run's recovery retries the revert).
 # `set +e` first: kill_tree and pkill return non-zero in normal use, which would end the trap early
@@ -52,6 +69,6 @@ _ingest_v3_on_kill() {
     echo "=== revert-run failed (exit $revert_exit) — run journal left for the next run's recovery ===" \
       >> "$AGENT_LOG"
   fi
-  release_post_merge_lock
+  release_v3_lock
   _agent_cleanup "$reason"
 }
