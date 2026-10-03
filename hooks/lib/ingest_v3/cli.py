@@ -45,6 +45,11 @@ def cmd_revert_run(a):
     return 0
 
 
+def cmd_run(a):
+    from .run import run
+    return run(a.project_root, a.agent_id, a.agent_dir, float(a.deadline))
+
+
 def build_parser():
     ap = argparse.ArgumentParser(prog="ingest-v3.py")
     sub = ap.add_subparsers(dest="cmd")
@@ -58,6 +63,12 @@ def build_parser():
     p.add_argument("--project-root", required=True)
     p.add_argument("--agent-dir", required=True)
     p.set_defaults(func=cmd_revert_run)
+    p = sub.add_parser("run", help="run ingest v3 once (called by hooks/lib/ingest-v3.sh)")
+    p.add_argument("--project-root", required=True)
+    p.add_argument("--agent-id", required=True)
+    p.add_argument("--agent-dir", required=True)
+    p.add_argument("--deadline", required=True, help="run deadline, epoch seconds")
+    p.set_defaults(func=cmd_run)
     return ap, sub
 
 
