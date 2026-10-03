@@ -57,13 +57,18 @@ class Source:
         self.cache = {}
 
     def resolve(self, path):
+        if path.startswith("./"):
+            path = path[2:]
         if path in self.files:
             return path
         suffix = [f for f in self.files if f.endswith("/" + path)]
         if len(suffix) == 1:
             return suffix[0]
-        base = [f for f in self.files if os.path.basename(f) == os.path.basename(path)]
-        return base[0] if len(base) == 1 else None
+        if "/" not in path:
+            base = [f for f in self.files if os.path.basename(f) == path]
+            if len(base) == 1:
+                return base[0]
+        return None
 
     def lines(self, path):
         if path not in self.cache:

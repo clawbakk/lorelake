@@ -19,7 +19,7 @@ RESIDUAL_CHECK = ("2. **residual**: each brief claim must no longer be present *
                   "status note). A claim still present is a finding: `quote` the page text that still says it.")
 
 
-def shared_prefix(llake_root, brief, names, write_mode, today, rel_inputs=""):
+def shared_prefix(llake_root, brief, names, write_mode, today, rel_inputs):
     if write_mode not in MODE_RULES:
         raise ValueError("ingest.v3.writeMode must be 'edit' or 'write', got {!r}".format(write_mode))
     themes = "\n".join("- **{} {}**: {}".format(t.get("id"), t.get("title"), t.get("summary", ""))

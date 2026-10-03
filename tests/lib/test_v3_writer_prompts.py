@@ -32,6 +32,18 @@ def test_broken_anchors_puts_quoted_lines_first_and_caps(proj):
     assert len(out) == 1 and out[0].startswith("L2:")
 
 
+def test_resolve_guards(tmp_path):
+    repo = make_project(tmp_path, src={"src/new/client.py": SRC, "a/main.py": SRC, "b/main.py": SRC,
+                                       "src/solo.py": SRC})
+    src = anchors.Source(str(repo))
+    assert src.resolve("src/old/client.py") is None          # moved directory is not guessed
+    assert src.resolve("./a/main.py") == "a/main.py"          # leading ./ stripped
+    assert src.resolve("main.py") is None                     # ambiguous basename
+    assert src.resolve("solo.py") == "src/solo.py"            # bare name, unique
+    assert anchors.check_anchors(src, ["`loadProfile` at `src/old/client.py:1`"])[0][1].find("names no file") >= 0
+    assert anchors.check_anchors(src, ["`loadProfile` at `./a/main.py:1`"]) == []
+
+
 def brief(create=False):
     page = {"page": "wiki/arch/client.md", "severity": "major", "kind": "direct", "themes": ["T1"],
             "reason": "renamed loader", "claims": [{"quote": "`fetchUserData` is at", "head": "src/app.py:1",
@@ -49,15 +61,15 @@ def brief(create=False):
 
 def test_shared_prefix(proj):
     text = prompts.shared_prefix(str(proj / "llake"), brief(create=True),
-                                 {"removed": ["fetchUserData"], "added": ["loadProfile"]}, "edit", "2026-10-02")
+                                 {"removed": ["fetchUserData"], "added": ["loadProfile"]}, "edit", "2026-10-02", "r")
     assert "**T1 Loader renamed**" in text
     assert "`fetchUserData`" in text and "`loadProfile`" in text
     assert "> **Superseded 2026-10-02:**" in text and "deprecated" in text
     assert "(planned new page) Retry limits" in text
     assert prompts.MODE_RULES["edit"] in text
-    assert prompts.MODE_RULES["write"] in prompts.shared_prefix(str(proj / "llake"), brief(), {}, "write", "d")
+    assert prompts.MODE_RULES["write"] in prompts.shared_prefix(str(proj / "llake"), brief(), {}, "write", "d", "r")
     with pytest.raises(ValueError):
-        prompts.shared_prefix(str(proj / "llake"), brief(), {}, "rewrite", "d")
+        prompts.shared_prefix(str(proj / "llake"), brief(), {}, "rewrite", "d", "r")
 
 
 def test_page_block(proj):
@@ -94,3 +106,12 @@ def test_verifier_prompt_modes(proj):
     assert "**residual**" in both
     with pytest.raises(ValueError):
         prompts.verifier_prompt(job, brief(), diffs, "p", "off")
+
+
+def test_shared_prefix_overflow_points_at_inputs_relative_path(proj):
+    names = {"removed": ["n{}".format(i) for i in range(151)], "added": []}
+    text = prompts.shared_prefix(str(proj / "llake"), brief(), names, "edit", "d", "llake/.state/x/inputs")
+    assert "full list in `llake/.state/x/inputs/names.json`" in text
+    with pytest.raises(TypeError):
+        prompts.shared_prefix(str(proj / "llake"), brief(), names, "edit", "d")
+    assert "concisely" not in text
