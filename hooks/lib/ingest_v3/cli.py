@@ -1,5 +1,6 @@
 """Command line for ingest v3, entered through hooks/lib/ingest-v3.py."""
 import argparse
+import json
 import os
 
 from . import gaps
@@ -38,6 +39,12 @@ def cmd_validate_gaps(a):
     return 0
 
 
+def cmd_revert_run(a):
+    from .snapshots import revert_run
+    print(json.dumps(revert_run(a.project_root, a.agent_dir)))
+    return 0
+
+
 def build_parser():
     ap = argparse.ArgumentParser(prog="ingest-v3.py")
     sub = ap.add_subparsers(dest="cmd")
@@ -47,6 +54,10 @@ def build_parser():
     p = sub.add_parser("validate-gaps", help="validate llake/ingest-gaps.json (doctor)")
     p.add_argument("--llake-root", required=True)
     p.set_defaults(func=cmd_validate_gaps)
+    p = sub.add_parser("revert-run", help="undo a killed run's writes under llake/ (kill trap)")
+    p.add_argument("--project-root", required=True)
+    p.add_argument("--agent-dir", required=True)
+    p.set_defaults(func=cmd_revert_run)
     return ap, sub
 
 
