@@ -16,20 +16,28 @@ Terms in **bold** at first use are defined in [`CONTEXT.md`](../../CONTEXT.md).
 
 **Scope.**
 
-- v3 is selected by `ingest.pipeline: "v3"`. Legacy stays the default; legacy and v2 are not changed and stay selectable.
+- v3 is selected by `ingest.pipeline: "v3"`. Legacy stays the default; legacy and v2 keep their behaviour and stay selectable.
 - v3 shares with the other pipelines: `ingest.include`, `ingest.branch`, `ingest.schedule` (the **batching gate**), the post-merge lock and the cursor file `llake/last-ingest-sha`. Everything else lives under `ingest.v3.*` and v3's own code.
 
 **Constraints** (from the map's Notes):
 
-- Every agent is a `claude -p` process. No API calls outside the CLI.
-- Runs are unattended. No step waits for a human; anything that needs one is recorded and reported.
+- Every agent is a `claude -p` process spawned from the post-merge hook, orchestrated by shell and Python. No Agent SDK and no API key. Several agents per run, concurrent ones included, are allowed.
+- Runs are unattended. No step waits for a human; anything that needs one is recorded and reported. Reviewability comes from the artifacts persisted in the agent dir and the log entry.
+- Opus for judgment; cheaper models only where the benchmark shows no loss, and always through a config knob. The writer default is a deliberate exception (§14, ADR).
 - Behaviour that a sweep could tune is a config knob, not a hardcoded choice. Choices the benchmark settled are fixed in code (see §13).
 - Code informs the agents; it does not bound them. Mechanical signals (hit index, change leads) are leads handed to judgment, not the limit of what judgment may find.
+- Diffs alone are not enough input: every agent can read the surrounding source at the range head.
 - No length bars. Conciseness is "to the point", never a word count.
 - No dependence on commit messages. Commit subjects may be shown; nothing relies on their detail.
 - Pages describe the code at the range head. A run does not summarize diffs or narrate change on state pages.
 
-**Non-goals** (the map's Out of scope): changing legacy or v2; changing bootstrap or capture (§17 lists what may transfer, as notes only).
+**Non-goals** (the map's Out of scope):
+
+- Retiring the legacy or v2 pipelines. v3 ships separately; both stay selectable.
+- Applying the prompt-cache TTL fix to legacy or v2.
+- Changes to the bootstrap or session-capture writers (§17 lists what may transfer, as notes only).
+- Any runtime other than `claude -p` from the hook.
+- A user-facing benchmark. The benchmark is a developer tool for choosing v3's design.
 
 ## 2. Pipeline at a glance
 
@@ -506,7 +514,7 @@ The brief is a large lever: the same writers and fix round on the Stage A brief 
 
 **Where K1 still loses.** Of the 60 stale quotes K1 left (all listed in the brief but not quoted), 53% are a restatement on another bundle's page, 32% an unswept sibling sentence on the writer's own page, 15% brief misses. Cross-page restatement is the main follow-up (§16).
 
-**The knee.** Marginal gain is 3.8 Q per dollar from legacy to K1, and 0.18 Q per dollar from K1 to O-med. Verifiers add 0.09–0.23 Q per dollar (Sonnet) or lose Q (Opus). K1 is the knee on Q and cost. It costs ≈1.8× legacy on the big backlog and ≈0.4× on the small range; no eligible setting reached "a fraction of legacy cost" on the big backlog. K1 is the default although it fails legacy parity: the operator chose it on 2026-10-02 for its false-statements-left count and price, and O-med is one knob away. The [ADR](../adr/0001-ingest-v3-pipeline.md) records this as a deliberate exception.
+**The knee.** Marginal gain is 3.8 Q per dollar from legacy to K1, and 0.18 Q per dollar from K1 to O-med. Verifiers add 0.09–0.23 Q per dollar (Sonnet) or lose Q (Opus). K1 is the knee on Q per dollar; under legacy parity (introduced errors only) the knee would be O-med. K1 costs ≈1.8× legacy on the big backlog and ≈0.4× on the small range; no eligible setting reached "a fraction of legacy cost" on the big backlog. K1 is the default although it fails legacy parity. On 2026-10-02 the operator delegated config defaults ("use the defaults you think would work best"), and the orchestrator chose K1 for its false-statements-left count and price; O-med is one knob away (`writerModel`). The [ADR](../adr/0001-ingest-v3-pipeline.md) records this as a deliberate exception.
 
 **Not measured.** A full end-to-end run with live analysis and recall feeding the writers (downstream was measured on frozen briefs); an accuracy audit on the small fixture; the reviewer's §5 checks on a finalist; anything above O-med.
 
