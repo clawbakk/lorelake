@@ -155,6 +155,11 @@ def next_record(prev, outcomes, other_stale, blurbs, head, agent, date, llake_ro
             elif o.get("unverified") and verifier_on:
                 cause, sev = "unverified", "minor"
                 claims = placeholder_claim(text, "the verifier did not check this page's rewrite this run")
+        elif outcome == "flagged":  # a failed fixer: owed even when its findings left the page (placeholder)
+            cause = "flagged"
+            claims = claims_on_page(o.get("flags", []), text)
+            if claims:
+                sev = "major" if any(c["severity"] == "major" for c in claims) else "minor"
         elif outcome == "declared":
             cause = "declared"
             claims = claims_on_page(o.get("claimsLeft", []), text) or claims_on_page(o.get("briefClaims", []), text)

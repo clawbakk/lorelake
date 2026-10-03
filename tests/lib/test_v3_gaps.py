@@ -115,6 +115,23 @@ def test_flagged_counts_attempt_and_takes_flag_severity(tmp_path):
         ("flagged", 1, "minor", "check:removed-name")
 
 
+def test_flagged_outcome_is_always_a_gap(tmp_path):
+    """A failed fixer is owed as `flagged` even when none of its findings is still on the page (placeholder)."""
+    llake = proj(tmp_path)
+    flags = [{"quote": QUOTE, "head": "src/x.py:4", "severity": "major", "source": "verifier:accuracy"}]
+    new, _, _ = gaps.next_record(doc(), [outcome("flagged", severity="minor", flags=flags)], [], [], "h", "a", "d",
+                                 str(llake), False)
+    g = new["gaps"][0]
+    assert (g["cause"], g["attempts"], g["severity"], g["claims"][0]["source"]) == \
+        ("flagged", 1, "major", "verifier:accuracy")
+    gone = [dict(flags[0], quote="text no longer on the page")]
+    new, resolved, _ = gaps.next_record(doc(), [outcome("flagged", flags=gone, carried=True)], [], [], "h", "a",
+                                        "d", str(llake), False)
+    g = new["gaps"][0]
+    assert (g["cause"], g["claims"][0]["quote"], resolved) == ("flagged", "The tick loop", [])
+    assert gaps.validate(new, str(llake)) == []
+
+
 def test_declared_uses_claims_left(tmp_path):
     llake = proj(tmp_path)
     left = [{"quote": QUOTE, "head": "h", "severity": "minor"}]
