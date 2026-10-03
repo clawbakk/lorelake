@@ -69,8 +69,8 @@ def test_failures_are_reported(run):
                                    "a" * 40, "b" * 40, [], [" M src/app.py"], 100.0)
     fails = [l for l in lines if l.startswith("- **FAIL**")]
     joined = "\n".join(fails)
-    assert "run cap" in joined and "permission denials" in joined and "outside llake/" in joined
-    assert "src/app.py" in joined and "every major brief page" in joined
+    assert "run cap" in joined and "permission denials" in joined and "outside llake/: /p/src/rogue.py" in joined
+    assert "every major brief page" in joined
 
 
 def test_major_no_change_is_a_warning(run):
@@ -123,3 +123,24 @@ def test_analysis_budget_above_run_cap_warns(run):
     lines = checks(state, Cfg(dict(CFG, maxRunBudgetUsd=5.0)))
     assert any(l.startswith("- **WARN**") and "analysis" in l and "not capped" in l for l in lines)
     assert not any("not capped" in l for l in checks(state))
+
+
+def test_git_status_change_outside_llake_is_a_warning_not_a_failure(run):
+    """The user may edit the project during a long run: a git-status change no v3 stream wrote is reported,
+    never failed (only stream-attributed writes outside llake/ fail)."""
+    repo, state = run
+    lines = report.run_check_lines(state, CFG, BRIEF, {"resolved": []}, "range", "a" * 40, "b" * 40,
+                                   [" M README.md"], [" M README.md", " M src/app.py", "?? notes.txt"], 100.0)
+    assert not any(l.startswith("- **FAIL**") for l in lines)
+    assert "- **PASS** no writes outside llake/" in lines
+    warn = [l for l in lines if "not attributed to v3" in l]
+    assert len(warn) == 1 and warn[0].startswith("- **WARN**")
+    assert "src/app.py" in warn[0] and "notes.txt" in warn[0] and "README.md" not in warn[0]
+
+
+def test_stream_attributed_write_outside_llake_fails(run):
+    repo, state = run
+    state.ledger["surface"] = [{"stage": "writer-b01", "path": "/p/src/rogue.py", "action": "reported-outside-llake"}]
+    lines = checks(state)
+    assert "- **FAIL** no writes outside llake/: /p/src/rogue.py" in lines
+    assert not any("not attributed to v3" in l for l in lines)

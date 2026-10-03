@@ -75,9 +75,11 @@ def run_check_lines(state, cfg, brief, summary, kind, base, head, git_before, gi
         + (": " + ", ".join(denied) if denied else ""))
     surface = state.ledger.get("surface") or []
     outside = [a["path"] for a in surface if a.get("action") == "reported-outside-llake"]
+    add("PASS" if not outside else "FAIL", "no writes outside llake/" + (": " + ", ".join(outside) if outside else ""))
+    # git status also moves with the user's own edits during a long run: reported, never failed.
     new_status = sorted(set(git_after) - set(git_before))
-    bad = outside + new_status
-    add("PASS" if not bad else "FAIL", "no writes outside llake/" + (": " + ", ".join(bad) if bad else ""))
+    if new_status:
+        add("WARN", "changed outside llake/ during the run, not attributed to v3: " + ", ".join(new_status))
     reverted = [a["path"] for a in surface if a.get("action") == "reverted"]
     if reverted:
         add("WARN", "out-of-surface writes reverted under llake/: " + ", ".join(reverted))
