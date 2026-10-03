@@ -11,6 +11,10 @@ docs/*
 !docs/INSTALL.md
 !docs/research/
 !docs/benchmark/
+!docs/adr/
+!docs/specs/
+docs/specs/*
+!docs/specs/ingest-v3.md
 llake/.state/
 .context/
 logs/
