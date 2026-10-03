@@ -75,5 +75,5 @@ Marginal gain: 3.8 Q per dollar from legacy to K1, 0.18 from K1 to O-med. Q nois
 - **Cost.** The default costs about 1.8× legacy on a large backlog and about 0.4× on a short range. No eligible setting reached "a fraction of legacy cost" on the big backlog.
 - **The cursor means "accounted for", not "current".** Pages behind the cursor may still be stale; the gap record says which, and the next run takes them first.
 - **A second committed state file.** `llake/ingest-gaps.json` sits next to `llake/last-ingest-sha`. It has no union merge rule, so two branches that both changed it can conflict on merge.
-- **Partial writes are handled by snapshot.** A writer that dies mid-bundle leaves no half-written page: the bundle is reverted and retried page by page.
+- **Partial writes are handled by snapshot.** A writer that dies mid-bundle leaves no half-written page: the bundle is reverted, then retried page by page on a work failure, or recorded as `infra` gaps on an infra failure.
 - **Unvalidated end to end.** Downstream stages were measured on frozen briefs. The design is unproven until the first real-install shakedown (spec §15) passes.

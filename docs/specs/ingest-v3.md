@@ -508,7 +508,7 @@ K1 fails **legacy parity**: one major introduced error and ten times legacy's ra
 | Stage A (Opus medium) | $4.79–4.98, ~120 turns, 864–897 s | — |
 | v4 with quotes (default) | brief Q 99.9, claim Q 40.8; 93 of 229 major claims quoted; must-correct 28/28, correct-or-declare 29/30; 1 **silent miss** candidate; $4.27 + recall $0.53; 67 turns | brief Q 100, claim Q 100, 23/23; $1.46 + recall $0.10; peak context 142k |
 
-The brief is a large lever: the same writers and fix round on the Stage A brief score 89.0; on the default brief, 94.1, at about equal cost. The lean v4 brief without quotes scores 1.8 less.
+The brief is a large lever: the same writers and fix round on the Stage A brief score 89.0; on the default brief, 94.1 in a matched single run, at about equal cost. The lean v4 brief without quotes scores 1.8 less.
 
 **Noise.** K1 over 6 runs: Q standard deviation 0.85. Differences under about 2 Q between single runs are not signal.
 
