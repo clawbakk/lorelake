@@ -90,7 +90,8 @@ def carried(doc, llake_root, scope):
             continue
         if scope == "major" and g.get("severity") != "major":
             continue
-        claims = [{"quote": str(c.get("quote", "")), "head": str(c.get("head", "")), "severity": _sev(c.get("severity"))}
+        claims = [{"quote": str(c.get("quote", "")), "head": str(c.get("head", "")), "severity": _sev(c.get("severity")),
+                   "source": c.get("source") if c.get("source") in SOURCES else "brief"}
                   for c in g.get("claims", []) if isinstance(c, dict)]
         entries.append({"page": page, "kind": "carried", "severity": _sev(g.get("severity")), "themes": [],
                         "reason": "carried gap ({})".format(g.get("cause")), "newFacts": [], "evidence": [],

@@ -242,3 +242,23 @@ def test_other_stale_mixed_report_notes_the_off_page_quote(tmp_path):
 
 def gaps_next(llake, other):
     return gaps.next_record(doc(), [], other, [], "h", "a", "d", str(llake), False)
+
+
+def test_carried_claims_keep_their_source(tmp_path):
+    """Provenance survives the carry: a carried check:removed-name claim keeps the checks' removed-name
+    exemption, and a writer:other claim is not relabelled brief."""
+    llake = proj(tmp_path, body="Intro.\n\n" + QUOTE + ".\n\nCalls `oldName` here.\n")
+    g = gap(severity="major")
+    g["claims"] = [dict(g["claims"][0], source="writer:other"),
+                   {"quote": "Calls `oldName` here", "head": "gone", "severity": "minor",
+                    "source": "check:removed-name"},
+                   {"quote": "Intro", "head": "h", "severity": "minor"}]
+    entries, _, _ = gaps.carried(doc(g), str(llake), "all")
+    assert [c["source"] for c in entries[0]["claims"]] == ["writer:other", "check:removed-name", "brief"]
+
+
+def test_causes_and_sources_match_the_gap_record_schema():
+    from ingest_v3.schema import load_schema
+    item = load_schema("gap-record")["properties"]["gaps"]["items"]
+    assert list(gaps.CAUSES) == item["properties"]["cause"]["enum"]
+    assert list(gaps.SOURCES) == item["properties"]["claims"]["items"]["properties"]["source"]["enum"]
