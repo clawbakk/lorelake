@@ -20,7 +20,7 @@ import traceback
 
 from . import names, plan, snapshots, stage
 from .agent import GLOB_CHARS, build_argv, clip_timeout, defer_signal, kill_live
-from .brief import InvalidBrief, assemble
+from .brief import InvalidBrief, assemble, fill_defaults
 from .bundle import make_bundles
 from .checks import run_checks
 from .common import dump_json, git, load_json, read_text
@@ -166,7 +166,7 @@ def _valid_page_file(path):
     if doc is None:
         return False
     schema = load_schema("brief-page")
-    return all(isinstance(d, dict) and not validate(d, schema) for d in (doc if isinstance(doc, list) else [doc]))
+    return all(isinstance(d, dict) and not validate(fill_defaults(d), schema) for d in (doc if isinstance(doc, list) else [doc]))
 
 
 def _recall(state, cfg, deadline, log):
