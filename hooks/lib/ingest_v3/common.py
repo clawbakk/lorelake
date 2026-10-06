@@ -12,6 +12,11 @@ SPLIT_AFTER_FAILURES = 2    # analysis work failures on one base before the rang
 STUCK_ATTEMPTS = 3          # dispatched failures before a gap is stuck
 BROKEN_ANCHOR_CAP = 25      # broken-anchor leads per page in a writer's bundle part
 
+# The plugin's own manifest, four levels up from this file (hooks/lib/ingest_v3/common.py).
+PLUGIN_MANIFEST = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+    ".claude-plugin", "plugin.json")
+
 
 def load_json(path, default=None):
     try:
@@ -19,6 +24,13 @@ def load_json(path, default=None):
             return json.load(fh)
     except (OSError, ValueError):
         return default
+
+
+def plugin_version():
+    """The running plugin's version from its manifest, or "unknown" when the file or field is missing."""
+    meta = load_json(PLUGIN_MANIFEST, None)
+    version = meta.get("version") if isinstance(meta, dict) else None
+    return str(version) if version else "unknown"
 
 
 def dump_json(path, obj):

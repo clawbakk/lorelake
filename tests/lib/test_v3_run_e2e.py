@@ -10,7 +10,7 @@ import pytest
 
 from v3_helpers import REPO_ROOT, commit, git, make_project, page_text
 from ingest_v3 import finalize, gaps, run, snapshots
-from ingest_v3.common import dump_json, load_json
+from ingest_v3.common import dump_json, load_json, plugin_version
 from ingest_v3.state import RunState
 
 CLIENT = "The client calls fetchUserData on start"
@@ -59,6 +59,11 @@ def cursor(repo):
 
 def hooks(repo):
     return (repo / "llake/.state/hooks.log").read_text()
+
+
+def seed_failures(repo, base, count, last):
+    dump_json(str(repo / "llake/.state/ingest-failures.json"),
+              {"base": base, "count": count, "lastHead": last, "plugin": plugin_version()})
 
 
 def test_range_run_finalizes(tmp_path, stages, monkeypatch):
@@ -118,8 +123,8 @@ def test_analysis_work_failure_holds_row_5(tmp_path, stages, monkeypatch):
     monkeypatch.setenv("V3_STUB_FAIL", "analysis")
     assert go(repo) == 1
     assert cursor(repo) == base
-    assert load_json(str(repo / "llake/.state/ingest-failures.json")) == {"base": base, "count": 1,
-                                                                          "lastHead": shas[-1]}
+    assert load_json(str(repo / "llake/.state/ingest-failures.json")) == {
+        "base": base, "count": 1, "lastHead": shas[-1], "plugin": plugin_version()}
     assert "held: agent run-1 v3 (analysis work failure" in hooks(repo)
 
 
@@ -139,7 +144,7 @@ def test_analysis_infra_failure_holds_without_counting_row_6(tmp_path, stages, m
 
 def test_split_run_advances_to_midpoint_row_4(tmp_path, stages, monkeypatch):
     repo, base, shas = project(tmp_path, commits=4)
-    dump_json(str(repo / "llake/.state/ingest-failures.json"), {"base": base, "count": 2, "lastHead": shas[-1]})
+    seed_failures(repo, base, 2, shas[-1])
     monkeypatch.setenv("V3_STUB_BRIEF", BRIEF)
     assert go(repo) == 0
     assert cursor(repo) == shas[1]
@@ -149,7 +154,7 @@ def test_split_run_advances_to_midpoint_row_4(tmp_path, stages, monkeypatch):
 
 def test_single_commit_skip_row_7(tmp_path, stages):
     repo, base, shas = project(tmp_path)
-    dump_json(str(repo / "llake/.state/ingest-failures.json"), {"base": base, "count": 2, "lastHead": shas[0]})
+    seed_failures(repo, base, 2, shas[0])
     assert go(repo) == 0
     assert cursor(repo) == shas[0] and stages() == []
     doc = load_json(str(repo / "llake/ingest-gaps.json"))
@@ -322,7 +327,7 @@ def test_split_midpoint_without_watched_changes_finalizes(tmp_path, stages):
     c2 = commit(repo, {"README.md": "two\n"}, "docs 2")
     commit(repo, {"src/app.py": "def loadProfile():\n    return 1\n"}, "rename")
     c4 = commit(repo, {"src/app.py": "def loadProfile():\n    return 2\n"}, "tweak")
-    dump_json(str(repo / "llake/.state/ingest-failures.json"), {"base": base, "count": 2, "lastHead": c4})
+    seed_failures(repo, base, 2, c4)
     assert go(repo) == 0
     assert cursor(repo) == c2 and stages() == []
     assert "ingest | {}..{}: v3 — 0 updated, 0 created, 0 gaps (0 major)".format(base[:7], c2[:7]) in \
@@ -333,7 +338,7 @@ def test_split_midpoint_without_watched_changes_finalizes(tmp_path, stages):
 
 def test_killed_skip_is_revertible(tmp_path, stages, monkeypatch):
     repo, base, shas = project(tmp_path)
-    dump_json(str(repo / "llake/.state/ingest-failures.json"), {"base": base, "count": 2, "lastHead": shas[0]})
+    seed_failures(repo, base, 2, shas[0])
     log_before = (repo / "llake/log.md").read_text()
 
     def killed(*a, **k):

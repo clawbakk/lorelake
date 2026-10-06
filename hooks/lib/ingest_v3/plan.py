@@ -1,16 +1,17 @@
 """Run planning (spec §3): run kinds, the analysis failure counter, range split and skip, dead-run recovery.
 
-Failure counter, .state/ingest-failures.json: {base, count, lastHead}. Work failures on the same base
-increment it and record the head that failed; infra failures change nothing. With count >= 2 the next
-run targets the first-parent chain of base..lastHead (newest first): one commit -> skip; more -> split
-to chain[len // 2], which is strictly older than lastHead, so each failure halves the range.
+Failure counter, .state/ingest-failures.json: {base, count, lastHead, plugin}. It applies only while its base
+and plugin version match the current ones. Work failures increment it and record the head that failed;
+infra failures change nothing; a pipeline failure (an invalid brief: deterministic, fails the same on any
+range) clears it. With count >= 2 the next run splits base..lastHead at its churn midpoint (split_point); a
+range whose watched changes sit in one first-parent commit cannot shrink and is skipped.
 """
 import collections
 import os
 import shutil
 
 from . import gaps
-from .common import SPLIT_AFTER_FAILURES, dump_json, git, load_json
+from .common import SPLIT_AFTER_FAILURES, dump_json, git, load_json, plugin_version
 
 FAILURES_REL = os.path.join(".state", "ingest-failures.json")
 RunPlan = collections.namedtuple("RunPlan", "kind head")
@@ -25,12 +26,22 @@ def load_failures(llake_root):
     return f if isinstance(f, dict) else {}
 
 
-def record_failure(llake_root, base, head, cls):
+def active_failures(llake_root, base):
+    """The counter, only while it belongs to this base and this plugin version; else {}."""
     f = load_failures(llake_root)
-    if cls != "work":
+    if f.get("base") == base and f.get("plugin") == plugin_version():
         return f
-    count = int(f.get("count", 0)) + 1 if f.get("base") == base else 1
-    f = {"base": base, "count": count, "lastHead": head}
+    return {}
+
+
+def record_failure(llake_root, base, head, cls):
+    if cls == "pipeline":
+        clear_failures(llake_root)
+        return {}
+    if cls != "work":
+        return load_failures(llake_root)
+    prev = active_failures(llake_root, base)
+    f = {"base": base, "count": int(prev.get("count", 0)) + 1, "lastHead": head, "plugin": plugin_version()}
     dump_json(_failures_path(llake_root), f)
     return f
 
@@ -55,8 +66,8 @@ def watched_changes(repo, base, head, include):
 def plan_run(repo, llake_root, include, base, head):
     if not watched_changes(repo, base, head, include):
         return RunPlan("gap-only" if gaps.owed_major(gaps.load(llake_root)) else "empty", head)
-    f = load_failures(llake_root)
-    if f.get("base") == base and int(f.get("count", 0)) >= SPLIT_AFTER_FAILURES:
+    f = active_failures(llake_root, base)
+    if int(f.get("count", 0)) >= SPLIT_AFTER_FAILURES:
         target = f.get("lastHead") or head
         try:
             chain = first_parent_chain(repo, base, target)

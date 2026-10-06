@@ -1,7 +1,7 @@
 """Run planning: kinds, failure counter, split halving, skip; journal recovery; RunState."""
-from v3_helpers import commit, git, make_project, write
-from ingest_v3 import plan, state
-from ingest_v3.common import dump_json, load_json
+from v3_helpers import REPO_ROOT, commit, git, make_project, write
+from ingest_v3 import common, plan, state
+from ingest_v3.common import dump_json, load_json, plugin_version
 
 
 def chain_repo(tmp_path, n):
@@ -36,11 +36,55 @@ def test_work_failures_count_infra_does_not(tmp_path):
     assert plan.record_failure(llake, base, shas[0], "infra") == {}
     assert plan.record_failure(llake, base, shas[0], "work")["count"] == 1
     f = plan.record_failure(llake, base, shas[0], "work")
-    assert f == {"base": base, "count": 2, "lastHead": shas[0]}
+    assert f == {"base": base, "count": 2, "lastHead": shas[0], "plugin": plugin_version()}
     assert plan.record_failure(llake, base, shas[0], "infra")["count"] == 2
     assert plan.record_failure(llake, "other", shas[0], "work")["count"] == 1
     plan.clear_failures(llake)
     assert plan.load_failures(llake) == {}
+
+
+def test_plugin_version_reads_the_manifest():
+    import json
+    assert plugin_version() == json.loads((REPO_ROOT / ".claude-plugin/plugin.json").read_text())["version"]
+
+
+def test_plugin_version_unknown_without_manifest(tmp_path, monkeypatch):
+    monkeypatch.setattr(common, "PLUGIN_MANIFEST", str(tmp_path / "missing.json"))
+    assert common.plugin_version() == "unknown"
+
+
+def test_pipeline_failure_clears_the_counter(tmp_path):
+    repo, llake, base, shas = chain_repo(tmp_path, 2)
+    plan.record_failure(llake, base, shas[-1], "work")
+    plan.record_failure(llake, base, shas[-1], "work")
+    assert plan.record_failure(llake, base, shas[-1], "pipeline") == {}
+    assert plan.load_failures(llake) == {}
+    assert plan.plan_run(repo, llake, ["src/"], base, shas[-1]) == ("range", shas[-1])
+
+
+def test_pipeline_failures_never_reach_split_or_skip(tmp_path):
+    repo, llake, base, shas = chain_repo(tmp_path, 1)
+    for _ in range(5):
+        plan.record_failure(llake, base, shas[0], "pipeline")
+    assert plan.plan_run(repo, llake, ["src/"], base, shas[0]) == ("range", shas[0])
+
+
+def test_counter_from_another_plugin_version_is_ignored(tmp_path, monkeypatch):
+    repo, llake, base, shas = chain_repo(tmp_path, 4)
+    monkeypatch.setattr(plan, "plugin_version", lambda: "0.1.8")
+    for _ in range(3):
+        plan.record_failure(llake, base, shas[1], "work")
+    monkeypatch.setattr(plan, "plugin_version", lambda: "0.1.9")
+    assert plan.plan_run(repo, llake, ["src/"], base, shas[-1]) == ("range", shas[-1])
+    assert plan.active_failures(llake, base) == {}
+    assert plan.record_failure(llake, base, shas[-1], "work") == {
+        "base": base, "count": 1, "lastHead": shas[-1], "plugin": "0.1.9"}
+
+
+def test_counter_without_plugin_key_is_ignored(tmp_path):
+    repo, llake, base, shas = chain_repo(tmp_path, 4)
+    dump_json(llake + "/.state/ingest-failures.json", {"base": base, "count": 3, "lastHead": shas[1]})
+    assert plan.plan_run(repo, llake, ["src/"], base, shas[-1]) == ("range", shas[-1])
 
 
 def test_split_after_two_work_failures_halves_until_skip(tmp_path):
