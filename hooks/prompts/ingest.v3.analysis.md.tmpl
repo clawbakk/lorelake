@@ -101,7 +101,7 @@ Write each file as soon as its content is settled, and never re-read a file you 
    - `head`: the `path:line` that proves what is true at head, plus at most 12 words.
    - claim `severity`: `major` when a reader acting on the page would be misled about behavior, data flow, an API or a config (wrong, removed or reversed); `minor` for a passing mention, a stale name in an aside, wording or a line anchor. Page `severity` is `major` if any claim is major.
    - `newFacts`: facts the range introduced that belong on this page, each with its evidence `path:line`. Give each new fact exactly **one home page**; other pages link to it.
-   - For a page that should exist and doesn't, use `"kind": "new"` with a path in an existing category, add `"title"` and `"description"`, list its facts in `newFacts`, and leave `stale` empty. Create a new page only when no existing page is a fitting home.
+   - For a page that should exist and doesn't, use `"kind": "new"` with a path in an existing category, add `"title"` and `"description"`, keep `"reason"` (one line on why the page is needed), list its facts in `newFacts`, and leave `stale` empty. Create a new page only when no existing page is a fitting home.
 3. `{{BRIEF_DIR}}/considered.json`: `[{"path": "llake/wiki/…", "reason": "one line"}]`, pages you examined and ruled out.
 4. `{{BRIEF_DIR}}/files.json`: `[{"path": "<changed file>", "themes": ["T1"], "pages": ["llake/wiki/…"], "note": "why no wiki impact, when pages is empty"}]`, every changed file accounted for.
 5. `{{BRIEF_DIR}}/notes.json`: `["…"]`, anything you could not verify or suspect you missed.

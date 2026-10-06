@@ -162,6 +162,21 @@ def test_new_page_needs_existing_category(tmp_path, llake):
     assert load_json(str(d / "brief-report.json"))["dropped_new_pages"] == ["wiki/nowhere/limits.md"]
 
 
+def test_new_page_without_reason_takes_its_description(tmp_path, llake):
+    new = entry(path="llake/wiki/arch/limits.md", kind="new", severity="minor", stale=[], title="Limits",
+                description="Retry limits", newFacts=["cap is 3 (src/c.py:3)"])
+    del new["reason"]
+    b = brief.assemble(str(agent_dir(tmp_path, [entry(), new])), str(llake), "h")
+    assert {p["page"]: p for p in b["pages"]}["wiki/arch/limits.md"]["reason"] == "Retry limits"
+
+
+def test_existing_page_without_reason_is_still_invalid(tmp_path, llake):
+    bad = entry()
+    del bad["reason"]
+    with pytest.raises(brief.InvalidBrief):
+        brief.assemble(str(agent_dir(tmp_path, [bad])), str(llake), "h")
+
+
 def test_recall_files_and_single_object_files_are_read(tmp_path, llake):
     d = agent_dir(tmp_path, [entry()], raw_files={
         "recall-1.json": json.dumps([entry(path="llake/wiki/arch/cache.md", severity="minor",

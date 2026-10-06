@@ -28,6 +28,13 @@ class InvalidBrief(Exception):
         self.errors = errors
 
 
+def fill_defaults(d):
+    """A new page's description already says why it is needed; analysis often omits `reason` there."""
+    if isinstance(d, dict) and d.get("kind") == "new" and "reason" not in d and d.get("description"):
+        d["reason"] = d["description"]
+    return d
+
+
 def _entries(brief_dir, errors, warnings):
     schema = load_schema("brief-page")
     out = []
@@ -42,7 +49,7 @@ def _entries(brief_dir, errors, warnings):
         items = doc if isinstance(doc, list) else [doc]
         for i, d in enumerate(items):
             where = "{}[{}]".format(name, i) if isinstance(doc, list) else name
-            errs = validate(d, schema)
+            errs = validate(fill_defaults(d), schema)
             if errs:
                 problems.extend("{}: {}".format(where, e) for e in errs)
                 continue
