@@ -21,7 +21,7 @@ import traceback
 
 from . import names, plan, snapshots, stage
 from .agent import GLOB_CHARS, build_argv, clip_timeout, defer_signal, kill_live
-from .brief import InvalidBrief, assemble, fill_defaults
+from .brief import MISSING_THEMES, InvalidBrief, assemble, fill_defaults
 from .bundle import make_bundles
 from .checks import run_checks
 from .common import dump_json, git, load_json, read_text
@@ -328,6 +328,10 @@ def _run(project_root, agent_id, agent_dir, deadline, environ, today, clock):
         try:
             brief = assemble(agent_dir, llake, rp.head, gap_only=gap_only)
         except InvalidBrief as exc:
+            if any(e.startswith(MISSING_THEMES) for e in exc.errors):
+                # the analysis agent produced no usable output: work, so the range can still shrink
+                plan.record_failure(llake, base, rp.head, "work")
+                raise HoldRun("analysis produced no usable brief: {}".format("; ".join(exc.errors[:3])[:120]))
             # deterministic: the same brief fails on any range, so it never counts toward split or skip
             plan.record_failure(llake, base, rp.head, "pipeline")
             raise HoldRun("pipeline error: invalid brief: {} (not counted toward split)".format(

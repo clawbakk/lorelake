@@ -22,6 +22,9 @@ def _is_root_file(raw):
     return parts[-1] in ROOT_NAMES and len(parts) <= 2
 
 
+MISSING_THEMES = "themes.json: missing or not valid JSON"  # the analysis wrote no usable themes.json: work
+
+
 class InvalidBrief(Exception):
     def __init__(self, errors):
         super(InvalidBrief, self).__init__("; ".join(errors[:5]))
@@ -114,7 +117,7 @@ def assemble(agent_dir, llake_root, head, gap_only=False):
     else:
         themes = load_json(os.path.join(bdir, "themes.json"), None)
         if themes is None:
-            errors.append("themes.json: missing or not valid JSON")
+            errors.append(MISSING_THEMES)
         else:
             errors.extend("themes.json: " + e for e in validate(themes, load_schema("brief-themes")))
         entries = _entries(bdir, errors, warnings)

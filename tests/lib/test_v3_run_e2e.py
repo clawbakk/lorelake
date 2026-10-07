@@ -19,7 +19,7 @@ BRIEF = json.dumps([{"path": "llake/wiki/arch/client.md", "kind": "direct", "sev
                                                              "severity": "major"}]}])
 STUB_VARS = ("V3_STUB_BRIEF", "V3_STUB_RECALL", "V3_STUB_FAIL", "V3_STUB_INFRA", "V3_STUB_SLEEP", "V3_STUB_MARK",
              "V3_STUB_IGNORE_TERM", "V3_STUB_DECLARE", "V3_STUB_COST", "V3_STUB_OTHER_STALE",
-             "V3_STUB_RECALL_CLOBBER", "V3_STUB_RECALL_EXTRA", "V3_STUB_STAY", "V3_STUB_PIDFILE",
+             "V3_STUB_RECALL_CLOBBER", "V3_STUB_RECALL_EXTRA", "V3_STUB_STAY", "V3_STUB_PIDFILE", "V3_STUB_NO_THEMES",
              "LLAKE_V3_STOP_AFTER", "LLAKE_V3_FROZEN_BRIEF")
 
 
@@ -139,6 +139,19 @@ def test_invalid_brief_is_a_pipeline_error_not_counted(tmp_path, stages, monkeyp
     assert not (repo / "llake/.state/ingest-failures.json").exists()
     assert "held: agent run-1 v3 (pipeline error: invalid brief:" in hooks(repo)
     assert "(not counted toward split)" in (repo / "llake/.state/agents/run-1/agent.log").read_text()
+
+
+def test_missing_themes_is_an_analysis_work_failure_counted(tmp_path, stages, monkeypatch):
+    """An analysis that wrote no usable themes.json produced no output: work, so the range can still shrink."""
+    repo, base, shas = project(tmp_path)
+    monkeypatch.setenv("V3_STUB_BRIEF", BRIEF)
+    monkeypatch.setenv("V3_STUB_NO_THEMES", "1")
+    assert go(repo) == 1
+    assert cursor(repo) == base
+    assert load_json(str(repo / "llake/.state/ingest-failures.json")) == {
+        "base": base, "count": 1, "lastHead": shas[-1], "plugin": plugin_version()}
+    assert "pipeline error" not in hooks(repo)
+    assert "held: agent run-1 v3 (analysis produced no usable brief: themes.json: missing" in hooks(repo)
 
 
 def test_held_invalid_briefs_then_fixed_brief_ingest_the_whole_range(tmp_path, stages, monkeypatch):

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Test stub for `claude -p` in ingest v3 runs ($0). Acts on LLAKE_AGENT_STAGE.
 
-  analysis    writes brief/themes.json and, from V3_STUB_BRIEF (raw JSON text), brief/pages/batch-1.json.
+  analysis    writes brief/themes.json (not when V3_STUB_NO_THEMES=1) and, from V3_STUB_BRIEF (raw JSON text),
+              brief/pages/batch-1.json.
               The brief dir comes from the `Edit(//<dir>/**)` allow rule.
   recall      writes brief/pages/recall-1.json from V3_STUB_RECALL (raw text) when set;
               V3_STUB_RECALL_CLOBBER=1 truncates analysis's batch-1.json to an invalid fragment;
@@ -88,8 +89,9 @@ def maybe_sleep():
 if stage == "analysis":
     brief = [r for r in rules if r.endswith("/**")][0][:-3]
     os.makedirs(os.path.join(brief, "pages"), exist_ok=True)
-    with open(os.path.join(brief, "themes.json"), "w") as fh:
-        json.dump([{"id": "T1", "title": "stub theme", "summary": "Stub summary."}], fh)
+    if os.environ.get("V3_STUB_NO_THEMES") != "1":
+        with open(os.path.join(brief, "themes.json"), "w") as fh:
+            json.dump([{"id": "T1", "title": "stub theme", "summary": "Stub summary."}], fh)
     if os.environ.get("V3_STUB_BRIEF"):
         with open(os.path.join(brief, "pages", "batch-1.json"), "w") as fh:
             fh.write(os.environ["V3_STUB_BRIEF"])
