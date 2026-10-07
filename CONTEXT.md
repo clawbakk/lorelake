@@ -54,7 +54,7 @@ _Avoid_: treating every fixed category as a record
 - **Carried gap**: a gap from an earlier run, taken on first by the next run.
 - **Stuck gap**: a gap that failed three dispatched attempts. It is no longer retried automatically and needs a human.
 - **Gap-only run**: a run with no new commit range that works only on carried major gaps.
-- **Range split**: after repeated analysis failure, ingesting the first half of the range, so that a failing range shrinks instead of widening.
+- **Range split**: after repeated analysis work failure, ingesting the range up to its watched-churn midpoint and then the rest, so that a failing range shrinks instead of widening. Pipeline failures (an invalid brief) never split.
 - **Silent miss**: an affected page a run neither corrected nor declared. Always fails the quality bar, whatever the page's staleness.
 - **Cost–quality curve**: candidate ingest designs plotted by cost against their quality score on the benchmark fixtures. v3's design is chosen on this curve rather than as the cheapest design that clears a fixed bar.
 - **Knee**: the point on the cost–quality curve past which spending more buys no justified gain in quality.

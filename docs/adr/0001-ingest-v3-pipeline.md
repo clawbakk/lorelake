@@ -29,7 +29,7 @@ Costs of plan-apply that v3 removes:
 - **Writing.** Writers edit their own pages directly. Each writer's allow list holds one `Edit(//path)` entry per owned page. Code snapshots each bundle before its writer starts, diffs afterwards, and reverts anything outside the surface or failing structural checks.
 - **Verification.** $0 code checks on what was written, then one fix round for flagged pages. The LLM verifier ships off by default (a knob).
 - **Bookkeeping.** Code alone writes `updated:` dates, indexes, the gap record, the log entry and the cursor.
-- **Cursor.** The cursor advances over pages a run could not bring current; they are recorded in the committed `llake/ingest-gaps.json` and taken on first by the next run. A gap is marked stuck after 3 attempts and is left for a human. Writer failures never hold the cursor. Analysis failures do hold it, and after 2 work failures on the same base the next run ingests half the range (a one-commit range is skipped and recorded).
+- **Cursor.** The cursor advances over pages a run could not bring current; they are recorded in the committed `llake/ingest-gaps.json` and taken on first by the next run. A gap is marked stuck after 3 attempts and is left for a human. Writer failures never hold the cursor. Analysis failures do hold it. After 2 work failures on the same base and plugin version, the next run ingests the range up to its churn midpoint and continues with the rest; a range whose watched changes sit in one commit is skipped and recorded. An invalid brief is a pipeline failure: it holds the cursor but never counts toward split or skip (LOR-25).
 
 ## Deliberate exception: Sonnet writers by default
 
