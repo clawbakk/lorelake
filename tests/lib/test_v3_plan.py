@@ -223,6 +223,13 @@ def test_commit_churn_counts_a_pure_rename(tmp_path):
     assert plan.commit_churn(str(repo), sha, ["src/"]) >= 1
 
 
+def test_commit_churn_of_a_root_commit_diffs_against_the_empty_tree(tmp_path):
+    """A parentless commit (reachable after a history rewrite) counts its whole content instead of raising."""
+    repo = make_project(tmp_path, src={"src/app.py": "a = 1\nb = 2\n"})
+    root = git(repo, "rev-list", "--max-parents=0", "HEAD").strip()
+    assert plan.commit_churn(str(repo), root, ["src/"]) == 2
+
+
 def test_split_never_lands_on_a_slice_without_watched_changes(tmp_path):
     repo, llake, base, trivial, merge = merge_repo(tmp_path)
     assert plan.split_point(repo, base, merge, ["src/"]) is None

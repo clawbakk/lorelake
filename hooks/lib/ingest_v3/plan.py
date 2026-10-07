@@ -65,8 +65,12 @@ def watched_changes(repo, base, head, include):
 
 def commit_churn(repo, sha, include):
     """Watched churn of one commit against its first parent: added + deleted lines, at least 1 per file (a pure
-    rename or a binary file counts 1). For a merge commit this is the merged branch's content."""
-    out = git(repo, "diff", "--numstat", sha + "^1", sha, "--", *include)
+    rename or a binary file counts 1). For a merge commit this is the merged branch's content; a root commit
+    (no parent, reachable after a history rewrite) is diffed against the empty tree."""
+    has_parent = len(git(repo, "rev-list", "--parents", "-n", "1", sha).split()) > 1
+    # the empty tree's id depends on the repo's object format (sha1 or sha256), so ask git for it
+    parent = sha + "^1" if has_parent else git(repo, "hash-object", "-t", "tree", "/dev/null").strip()
+    out = git(repo, "diff", "--numstat", parent, sha, "--", *include)
     total = 0
     for line in out.splitlines():
         parts = line.split("\t")
