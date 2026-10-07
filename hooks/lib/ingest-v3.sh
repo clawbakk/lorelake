@@ -37,6 +37,41 @@ run_ingest_v3() {
   wait "$V3_PY_PID"
 }
 
+# `ingest-v3.py run` exit code for "a split or skip finalized short of HEAD" (run.EXIT_CONTINUE).
+V3_EXIT_CONTINUE=3
+
+# One v3 run under the hard watchdog, inside post-merge.sh's run subshell, for the current agent globals
+# (V3_AGENT_ID V3_AGENT_DIR V3_AGENT_LOG V3_PID_FILE). Returns the run's exit code.
+run_ingest_v3_watched() {
+  local rc=0
+  (
+    sleep "$V3_WATCHDOG"
+    if kill -0 "$MY_PID" 2>/dev/null; then kill -USR1 "$MY_PID" 2>/dev/null; fi
+  ) &
+  WATCHDOG_PID=$!
+  run_ingest_v3 "$V3_AGENT_ID" "$V3_AGENT_DIR" "$V3_AGENT_LOG" "$V3_TIMEOUT" || rc=$?
+  kill_tree "$WATCHDOG_PID"
+  wait "$WATCHDOG_PID" 2>/dev/null
+  rm -f "$V3_PID_FILE"
+  return "$rc"
+}
+
+# Point the run subshell at a fresh agent for the continuation run: new ID, dir, log and pid file, plus the
+# agent-run.sh globals the kill traps read (AGENT_LOG, CURRENT_PID_FILE, LLAKE_AGENT_ID), so a kill reverts
+# and logs the continuation, not the finished run before it.
+next_v3_agent() {
+  V3_AGENT_ID=$(generate_agent_id)
+  V3_AGENT_DIR="$AGENTS_DIR/$V3_AGENT_ID"
+  mkdir -p "$V3_AGENT_DIR"
+  V3_AGENT_LOG="$V3_AGENT_DIR/agent.log"
+  V3_PID_FILE="$V3_AGENT_DIR/orchestrator.pid"
+  echo "$MY_PID" > "$V3_PID_FILE"
+  AGENT_LOG="$V3_AGENT_LOG"
+  CURRENT_PID_FILE="$V3_PID_FILE"
+  LLAKE_AGENT_ID="$V3_AGENT_ID"
+  V3_PY_PID=  # the last run's python has exited; its PID may be reused before the next run starts
+}
+
 # The post-merge lock under v3. acquire_post_merge_lock records `$$`, which inside the `( … ) &` run
 # subshell is the hook's PID — and the hook exits at once, so the lock would name a dead owner and turn
 # reclaimable as stale an hour in, while the run (deadline up to ingest.v3.timeoutSeconds + grace) is

@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LOR-25 Run Report</title>
+<style>
+/* linear-ship run report stylesheet. scripts/report inlines this file into every report,
+   and the reporter fallback (references/reporter.md) inlines it too, so both look alike.
+   Taken from the agent-written BAQ-36 report; keep the two renderers on these classes:
+
+   .container > header.top (h1, .meta rows, .badge.green|amber|red|gray)
+   .kpi-row > .tile (.label, .value, .sub)
+   .card > h2 (.model-tag) / h3 / p.note / .table-scroll > table (thead, tbody, tfoot)
+   .links-list (dl) · .blocker.open|resolved|left-open (.blocker-title, dl)
+   .verify-grid > .verify-col (h4, .verify-row .k .v) · .timeline > .tl-item (.tl-time, .tl-label)
+   table.decisions-table · ol.ruling-list (li .cost) · .warnbox · .failbox · footer.page-footer */
+:root {
+  --bg: #f3f5f8;
+  --card-bg: #ffffff;
+  --card-bg-alt: #fafbfc;
+  --border: #dfe3e9;
+  --text: #1b2430;
+  --text-muted: #5c6675;
+  --text-faint: #8b93a1;
+  --accent: #2f6fed;
+  --accent-bg: #eaf0fe;
+  --code-bg: #eef0f4;
+  --green-bg: #e6f6ea;
+  --green-text: #187a3a;
+  --green-border: #a9dfba;
+  --amber-bg: #fff3df;
+  --amber-text: #8a5b06;
+  --amber-border: #ffdd9e;
+  --red-bg: #fdeaea;
+  --red-text: #ab2b26;
+  --red-border: #f4b8b5;
+  --gray-bg: #edeff2;
+  --gray-text: #4a525f;
+  --gray-border: #d6dae0;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151b;
+    --card-bg: #1a1f28;
+    --card-bg-alt: #171b23;
+    --border: #2b3240;
+    --text: #e6e9ef;
+    --text-muted: #a3aebc;
+    --text-faint: #78828f;
+    --accent: #6a9bff;
+    --accent-bg: #1e2a45;
+    --code-bg: #222834;
+    --green-bg: #163524;
+    --green-text: #6fe0a0;
+    --green-border: #245538;
+    --amber-bg: #3a2d10;
+    --amber-text: #f0c059;
+    --amber-border: #5a4517;
+    --red-bg: #3a1a1a;
+    --red-text: #ff8a85;
+    --red-border: #5c2624;
+    --gray-bg: #232a35;
+    --gray-text: #b7c0cc;
+    --gray-border: #313a48;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151b;
+  --card-bg: #1a1f28;
+  --card-bg-alt: #171b23;
+  --border: #2b3240;
+  --text: #e6e9ef;
+  --text-muted: #a3aebc;
+  --text-faint: #78828f;
+  --accent: #6a9bff;
+  --accent-bg: #1e2a45;
+  --code-bg: #222834;
+  --green-bg: #163524;
+  --green-text: #6fe0a0;
+  --green-border: #245538;
+  --amber-bg: #3a2d10;
+  --amber-text: #f0c059;
+  --amber-border: #5a4517;
+  --red-bg: #3a1a1a;
+  --red-text: #ff8a85;
+  --red-border: #5c2624;
+  --gray-bg: #232a35;
+  --gray-text: #b7c0cc;
+  --gray-border: #313a48;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+.container {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 20px 16px 48px;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* Header */
+header.top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+header.top h1 {
+  font-size: 1.35rem;
+  margin: 0 0 6px 0;
+  line-height: 1.3;
+}
+header.top .meta {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 8px;
+}
+header.top .meta span b { color: var(--text); font-weight: 600; }
+
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.badge.green  { background: var(--green-bg); color: var(--green-text); border-color: var(--green-border); }
+.badge.amber  { background: var(--amber-bg); color: var(--amber-text); border-color: var(--amber-border); }
+.badge.red    { background: var(--red-bg);   color: var(--red-text);   border-color: var(--red-border); }
+.badge.gray   { background: var(--gray-bg);  color: var(--gray-text);  border-color: var(--gray-border); }
+
+/* KPI row */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+  margin-bottom: 20px;
+}
+@media (max-width: 720px) {
+  .kpi-row { grid-template-columns: repeat(2, 1fr); }
+}
+.tile {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.tile .label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+}
+.tile .value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.15;
+}
+.tile .sub {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* Cards */
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 18px;
+}
+.card h2 {
+  font-size: 1rem;
+  margin: 0 0 12px 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.card h2 .model-tag {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-faint);
+  text-transform: none;
+}
+.card h3 {
+  font-size: 0.85rem;
+  margin: 14px 0 8px 0;
+  color: var(--text-muted);
+}
+.card p.note {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 4px 0 0 0;
+}
+
+.links-list {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 6px 12px;
+  font-size: 0.88rem;
+}
+.links-list dt { color: var(--text-muted); }
+.links-list dd { margin: 0; word-break: break-word; }
+
+/* Table wrapper for horizontal scroll containment */
+.table-scroll {
+  overflow-x: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.83rem;
+  min-width: 480px;
+}
+thead th {
+  background: var(--card-bg-alt);
+  text-align: left;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+tbody td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tbody tr:last-child td { border-bottom: none; }
+tfoot td {
+  padding: 8px 10px;
+  background: var(--card-bg-alt);
+  font-weight: 600;
+  border-top: 1px solid var(--border);
+}
+code {
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.85em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.blocker {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.blocker.open { border-left: 4px solid var(--red-text); }
+.blocker.left-open { border-left: 4px solid var(--amber-text); }
+.blocker.resolved { border-left: 4px solid var(--green-text); }
+.blocker-title { font-weight: 650; margin-bottom: 6px; display: flex; gap: 8px; align-items: baseline; font-size: 0.9rem; }
+.blocker-title .badge { flex: none; }
+.blocker-title > span:last-child { min-width: 0; }
+.blocker dl { margin: 6px 0 0; font-size: 0.85rem; }
+.blocker dt { color: var(--text-muted); margin-top: 6px; }
+.blocker dd { margin: 2px 0 0; word-break: break-word; }
+
+/* Two-column verification */
+.verify-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 640px) {
+  .verify-grid { grid-template-columns: 1fr; }
+}
+.verify-col {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--card-bg-alt);
+}
+.verify-col h4 { margin: 0 0 8px 0; font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.02em; }
+.verify-row { display: flex; justify-content: space-between; font-size: 0.85rem; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+.verify-row:last-child { border-bottom: none; }
+.verify-row .k { color: var(--text-muted); }
+.verify-row .v { font-weight: 600; }
+
+/* Timeline */
+.timeline {
+  position: relative;
+  margin-left: 8px;
+  padding-left: 20px;
+  border-left: 2px solid var(--border);
+}
+.tl-item {
+  position: relative;
+  padding-bottom: 16px;
+}
+.tl-item:last-child { padding-bottom: 0; }
+.tl-item::before {
+  content: "";
+  position: absolute;
+  box-sizing: border-box; /* * {} doesn't reach pseudo-elements; the ring must count in the width */
+  left: -27.5px;          /* 13px dot centred on the line: -(20px padding + 1px half-line) - 6.5px */
+  top: 1px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--card-bg);
+}
+.tl-item .tl-time {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.tl-item .tl-label { font-size: 0.87rem; margin-top: 2px; }
+.tl-item .tl-label b { font-weight: 600; }
+
+/* Decisions list */
+.decisions-table td:nth-child(1) { white-space: nowrap; font-weight: 600; color: var(--text-muted); }
+.ruling-list { margin: 0; padding-left: 18px; font-size: 0.85rem; }
+.ruling-list li { margin-bottom: 8px; }
+.ruling-list li .cost { color: var(--text-faint); font-size: 0.8rem; }
+
+footer.page-footer {
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 0.75rem;
+  margin-top: 24px;
+}
+
+/* Additions for states the BAQ-36 report didn't have */
+.warnbox, .failbox {
+  border: 1px solid;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  margin: 0 0 10px 0;
+}
+.warnbox { background: var(--amber-bg); color: var(--amber-text); border-color: var(--amber-border); }
+.failbox { background: var(--red-bg); color: var(--red-text); border-color: var(--red-border); }
+.card .md p { font-size: 0.85rem; color: var(--text-muted); margin: 4px 0 10px 0; }
+.card .md ul { margin: 0 0 10px 0; padding-left: 18px; font-size: 0.85rem; }
+.card .md h4 { font-size: 0.8rem; margin: 12px 0 6px 0; color: var(--text-muted); }
+td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header class="top">
+    <div>
+      <h1><a href="https://linear.app/clawbakk/issue/LOR-25/v3-split-after-a-deterministic-failure-processes-an-empty-slice">LOR-25</a> &mdash; v3 split after a deterministic failure processes an empty slice instead of resuming from the held cursor</h1>
+      <div class="meta">
+        <span>Status: <span class="badge green">Shipped</span> <span style="color:var(--text-faint)">PR open &middot; ticket In Review</span></span>
+        <span>Mode: <b>autonomous</b></span>
+        <span>Branch: <code>a-andrew/lor-25-v3-split-after-a-deterministic-failure-processes-an-empty</code></span>
+      </div>
+      <div class="meta">
+        <span>Run: <b class="tabular">2026-10-06 17:36 MDT</b> &rarr; <b class="tabular">18:55:44</b></span>
+        <span>Wall clock: <b>1h 18m</b></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="kpi-row"><div class="tile"><div class="label">Tasks completed</div><div class="value tabular">5 / 5</div></div><div class="tile"><div class="label">Commits</div><div class="value tabular">11</div><div class="sub">3 docs &middot; 8 code</div></div><div class="tile"><div class="label">Files changed</div><div class="value tabular">21</div><div class="sub"><span class="tabular">+1,517 / &minus;89</span></div></div><div class="tile"><div class="label">Advisor calls</div><div class="value tabular">2</div><div class="sub">Opus 5.5</div></div><div class="tile"><div class="label">Decision points</div><div class="value tabular">2</div><div class="sub">self 0 &middot; human 1 &middot; advisor 1<br>(+4 rulings)</div></div><div class="tile"><div class="label">Blockers open</div><div class="value tabular" style="color:var(--green-text)">0</div><div class="sub">1 resolved, 0 open</div></div></div>
+
+  <div class="card" id="notes"><h2>Notes</h2><ol class="ruling-list"><li>Plan phase: docs/* is gitignored (only INSTALL, research, benchmark, adr, specs/ingest-v3.md whitelisted; LOR-14 commit says other internal docs stay ignored). Planner force-added the LOR-25 design and plan under docs/plans/ so the branch carries them; .gitignore unchanged. Drop them from the PR (git rm --cached) if the human wants internal plans untracked.</li><li>Installing 0.1.10 in baqqetto is enough for the current state: the next trigger plans one range run <code>0a8995d..HEAD</code> (the 0.1.9 counter, if any, has no <code>plugin</code> key and is ignored). LOR-26 covers only the cost of a *future* repeated validator error.</li><li>Deferred minors left open (final review: can-wait): split_point does not net-check <code>c..target</code>; O(N) git calls per split decision; no binary-churn test; no integration test that kills the continuation run; pre-existing watchdog race can drop a continuation (cursor safe at split point); continuation agent.log header shows the hook range.</li></ol></div>
+
+  <div class="card" id="links"><h2>Links</h2><dl class="links-list"><dt>Pull request</dt><dd><a href="https://github.com/clawbakk/lorelake/pull/21">github.com/clawbakk/lorelake/pull/21</a> &mdash; OPEN, +1,517/&minus;89, 21 files</dd><dt>Linear ticket</dt><dd><a href="https://linear.app/clawbakk/issue/LOR-25/v3-split-after-a-deterministic-failure-processes-an-empty-slice">LOR-25 &mdash; v3 split after a deterministic failure processes an empty slice instead of resuming from the held cursor</a> &mdash; In Review</dd><dt>Design doc</dt><dd><a href="2026-10-06-LOR-25-split-after-deterministic-failure-design.md"><code>2026-10-06-LOR-25-split-after-deterministic-failure-design.md</code></a></dd><dt>Plan</dt><dd><a href="2026-10-06-LOR-25-split-after-deterministic-failure.md"><code>2026-10-06-LOR-25-split-after-deterministic-failure.md</code></a></dd></dl></div>
+
+  <!-- linear-ship:cost:begin -->
+<style>
+.lsc{--lsc-surface:#ffffff;--lsc-alt:#fafbfc;--lsc-text:#1b2430;--lsc-muted:#5c6675;--lsc-faint:#8b93a1;--lsc-border:#dfe3e9;--lsc-code:#eef0f4;margin:0 0 18px 0}
+.lsc .s1{--c:#2a78d6}
+  .lsc .s2{--c:#eb6834}
+  .lsc .s3{--c:#1baf7a}
+  .lsc .s4{--c:#eda100}
+  .lsc .s5{--c:#e87ba4}
+  .lsc .s6{--c:#008300}
+  .lsc .s7{--c:#4a3aa7}
+@media (prefers-color-scheme: dark){
+  :root:where(:not([data-theme="light"])) .lsc{--lsc-surface:#1a1f28;--lsc-alt:#171b23;--lsc-text:#e6e9ef;--lsc-muted:#a3aebc;--lsc-faint:#78828f;--lsc-border:#2b3240;--lsc-code:#222834}
+    :root:where(:not([data-theme="light"])) .lsc .s1{--c:#3987e5}
+    :root:where(:not([data-theme="light"])) .lsc .s2{--c:#d95926}
+    :root:where(:not([data-theme="light"])) .lsc .s3{--c:#199e70}
+    :root:where(:not([data-theme="light"])) .lsc .s4{--c:#c98500}
+    :root:where(:not([data-theme="light"])) .lsc .s5{--c:#d55181}
+    :root:where(:not([data-theme="light"])) .lsc .s6{--c:#008300}
+    :root:where(:not([data-theme="light"])) .lsc .s7{--c:#9085e9}
+}
+:root[data-theme="dark"] .lsc{--lsc-surface:#1a1f28;--lsc-alt:#171b23;--lsc-text:#e6e9ef;--lsc-muted:#a3aebc;--lsc-faint:#78828f;--lsc-border:#2b3240;--lsc-code:#222834}
+:root[data-theme="dark"] .lsc .s1{--c:#3987e5}
+:root[data-theme="dark"] .lsc .s2{--c:#d95926}
+:root[data-theme="dark"] .lsc .s3{--c:#199e70}
+:root[data-theme="dark"] .lsc .s4{--c:#c98500}
+:root[data-theme="dark"] .lsc .s5{--c:#d55181}
+:root[data-theme="dark"] .lsc .s6{--c:#008300}
+:root[data-theme="dark"] .lsc .s7{--c:#9085e9}
+.lsc .lsc-card{min-width:0;max-width:100%;box-sizing:border-box;border:1px solid var(--lsc-border);border-radius:12px;padding:16px 18px;background:var(--lsc-surface);color:var(--lsc-text)}
+.lsc h2{font-size:1rem;margin:0 0 12px 0}
+.lsc code{background:var(--lsc-code);padding:1px 5px;border-radius:4px;font-size:.85em;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.lsc .lsc-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+@media (max-width:720px){.lsc .lsc-kpis{grid-template-columns:1fr}}
+.lsc .lsc-kpi{border:1px solid var(--lsc-border);border-radius:10px;padding:12px 14px}
+.lsc .lsc-kpi .lsc-label{display:block;font-size:.68rem;text-transform:uppercase;letter-spacing:.03em;color:var(--lsc-faint);margin-bottom:6px}
+.lsc .lsc-kpi b{display:block;font-size:1.35rem;font-weight:700;line-height:1.15;font-variant-numeric:tabular-nums}
+.lsc .lsc-muted{color:var(--lsc-muted);font-size:.85rem}
+.lsc .lsc-body{display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start}
+.lsc svg{flex:0 0 180px;width:180px;height:180px}
+.lsc svg path,.lsc svg circle{fill:var(--c);stroke:var(--lsc-surface);stroke-width:2;stroke-linejoin:round}
+.lsc .lsc-tables{flex:1 1 320px;min-width:0}
+.lsc .lsc-scroll{overflow-x:auto;border:1px solid var(--lsc-border);border-radius:8px}
+.lsc .lsc-scroll + .lsc-scroll{margin-top:12px}
+.lsc table{border-collapse:collapse;width:100%;font-size:.83rem;color:inherit}
+.lsc thead th{background:var(--lsc-alt);text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:.02em;color:var(--lsc-faint);font-weight:700;padding:8px 10px;border-bottom:1px solid var(--lsc-border);white-space:nowrap}
+.lsc tbody td{padding:8px 10px;border-bottom:1px solid var(--lsc-border);white-space:nowrap}
+.lsc tbody tr:last-child td{border-bottom:none}
+.lsc tfoot td{padding:8px 10px;background:var(--lsc-alt);font-weight:600;border-top:1px solid var(--lsc-border)}
+.lsc .num{text-align:right;font-variant-numeric:tabular-nums}
+.lsc .lsc-sw{display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--c);margin-right:8px;vertical-align:baseline}
+.lsc p.lsc-muted{margin:12px 0 0 0}
+</style>
+<section class="lsc" id="cost">
+  <div class="lsc-card">
+    <h2>Cost</h2>
+    <div class="lsc-kpis">
+      <div class="lsc-kpi"><span class="lsc-label">Total, API list price</span><b>$11.04</b></div>
+      <div class="lsc-kpi"><span class="lsc-label">Report generation (incl. estimate)</span><b>$0.615</b></div>
+      <div class="lsc-kpi"><span class="lsc-label">API requests · 2 sessions</span><b>197</b></div>
+    </div>
+    <div class="lsc-body">
+      <svg viewBox="0 0 180 180" role="img" aria-label="Cost breakdown by role">
+      <path class="s1" d="M90,90 L90.00,10.00 A80,80 0 1 1 71.78,167.90 Z"><title>Orchestrator (main session): $5.92 (53.7%)</title></path>
+      <path class="s2" d="M90,90 L71.78,167.90 A80,80 0 0 1 12.94,111.48 Z"><title>Planning (planner): $1.88 (17.0%)</title></path>
+      <path class="s4" d="M90,90 L12.94,111.48 A80,80 0 0 1 18.49,54.14 Z"><title>Reviews: $1.29 (11.7%)</title></path>
+      <path class="s5" d="M90,90 L18.49,54.14 A80,80 0 0 1 33.97,32.90 Z"><title>Advisor: $0.580 (5.3%)</title></path>
+      <path class="s6" d="M90,90 L33.97,32.90 A80,80 0 0 1 56.94,17.15 Z"><title>Report generation: $0.615 (5.6%)</title></path>
+      <path class="s7" d="M90,90 L56.94,17.15 A80,80 0 0 1 90.00,10.00 Z"><title>Other subagents: $0.748 (6.8%)</title></path>
+      </svg>
+      <div class="lsc-tables">
+        <div class="lsc-scroll"><table>
+          <thead><tr><th>Role</th><th class="num">Cost</th><th class="num">Share</th><th class="num">Requests</th><th class="num">Tokens</th></tr></thead>
+          <tbody><tr><td><span class="lsc-sw s1"></span>Orchestrator (main session)</td><td class="num">$5.92</td><td class="num">53.7%</td><td class="num">89</td><td class="num" title="input 216 · cache write 262,313 · cache read 13,879,069 · output 52,386">14.2M</td></tr><tr><td><span class="lsc-sw s2"></span>Planning (planner)</td><td class="num">$1.88</td><td class="num">17.0%</td><td class="num">33</td><td class="num" title="input 68 · cache write 205,681 · cache read 4,210,291 · output 389">4.4M</td></tr><tr><td><span class="lsc-sw s4"></span>Reviews</td><td class="num">$1.29</td><td class="num">11.7%</td><td class="num">30</td><td class="num" title="input 60 · cache write 182,463 · cache read 1,860,360 · output 469">2.0M</td></tr><tr><td><span class="lsc-sw s5"></span>Advisor</td><td class="num">$0.580</td><td class="num">5.3%</td><td class="num">14</td><td class="num" title="input 28 · cache write 87,908 · cache read 682,967 · output 179">771.1k</td></tr><tr><td><span class="lsc-sw s6"></span>Report generation <span class="lsc-muted">(incl. est. $0.615)</span></td><td class="num">$0.615</td><td class="num">5.6%</td><td class="num">0</td><td class="num" title="input 0 · cache write 0 · cache read 0 · output 0">0</td></tr><tr><td><span class="lsc-sw s7"></span>Other subagents</td><td class="num">$0.748</td><td class="num">6.8%</td><td class="num">31</td><td class="num" title="input 62 · cache write 67,374 · cache read 2,009,454 · output 472">2.1M</td></tr></tbody>
+          <tfoot><tr><td>Total</td><td class="num">$11.04</td><td class="num">100%</td><td colspan="2"></td></tr></tfoot>
+        </table></div>
+        <div class="lsc-scroll"><table>
+          <thead><tr><th>Model</th><th class="num">Cost</th><th class="num">Requests</th></tr></thead>
+          <tbody><tr><td><code>claude-opus-5-5</code></td><td class="num">$10.42</td><td class="num">197</td></tr></tbody>
+        </table></div>
+      </div>
+    </div>
+    <p class="lsc-muted">Measured from the Claude Code session transcripts: every API request's token usage, priced at list rates (list price $/MTok, claude-api skill table cached 2026-06-24). This is what the run would cost on the API, not what a subscription bills. Report generation is the reporter subagent plus the main session from its dispatch on, measured, plus an estimate of $0.615 for the 8 closing requests that run after this section is written (commit, push, summary; mean of the last 10 main-session requests x turns).</p>
+    <p class="lsc-muted">Not priced (no list price known, excluded from the total): <code>claude-sonnet-5-5</code>.</p>
+  </div>
+</section>
+<!-- linear-ship:cost:end -->
+
+  <div class="card" id="blockers"><h2>Blockers</h2><div class="blocker resolved"><div class="blocker-title"><span class="badge green">Resolved</span> <span>#B1 &mdash; File follow-up F1 (backoff for repeated pipeline errors under one plugin version)?</span></div><dl><dt>Question / context</dt><dd>Raised <span class="tabular">2026-10-06 18:51 MDT</span> in linear. Design §2.1 accepted cost; no open ticket covers it</dd><dt>Advisor answer (confidence)</dt><dd>file it (Backlog, Follow-Up, related to LOR-25) <span class="badge amber">medium</span></dd><dt>Resolution</dt><dd>Resolved <span class="tabular">2026-10-06 18:55 MDT</span>: Human: file it (after confirming 0.1.10 alone fixes the current baqqetto state) — filed LOR-26</dd></dl></div></div>
+
+  <div class="card" id="advisor"><h2>Advisor calls <span class="model-tag">Model: Opus 5.5 (opus)</span></h2><div class="table-scroll"><table><thead><tr><th>#</th><th>Phase</th><th>Question</th><th>Answer</th><th>Confidence</th><th class=num>Duration</th><th class=num>Tokens</th><th>Action taken</th></tr></thead><tbody><tr><td>1</td><td>plan</td><td>Spec review of docs/plans/2026-10-06-LOR-25-split-after-deterministic-failure-design.md</td><td>APPROVED</td><td><span class="badge green">high</span></td><td class=num>73.0s</td><td class=num>71,143</td><td>applied; planner resumed</td></tr><tr><td>2</td><td>linear</td><td>Follow-up F1 (backoff for repeated pipeline errors): file, comment or skip?</td><td>file: &#x27;v3: back off repeated pipeline errors under one plugin version&#x27; (Backlog, Follow-Up, related to LOR-25)</td><td><span class="badge amber">medium</span></td><td class=num>32.6s</td><td class=num>54,895</td><td>blocker B1 — asked in close-out batch</td></tr></tbody><tfoot><tr><td colspan="5">Total</td><td class="num">105.6s</td><td class="num">126,038</td><td></td></tr></tfoot></table></div></div>
+
+  <div class="card" id="followups"><h2>Follow-ups <span class="model-tag">Pending: 0</span></h2><div class="table-scroll"><table><thead><tr><th>Title</th><th>Scope</th><th>Tracked-work check</th><th>Decision</th><th>Decided by</th><th>Result</th></tr></thead><tbody><tr><td>v3: back off repeated pipeline errors under one plugin version</td><td>After LOR-25 a persistent invalid-brief (pipeline) failure holds the cursor without counting, so every trigger re-runs a full analysis (~$2-7) until a plugin fix ships. Add a backoff (e.g. skip analysis while the same pipeline error repeats under the same plugin version and base, logging it) so a contract bug does not burn budget per merge.</td><td>no open ticket in Ingest Pipeline: v3 (searched &#x27;pipeline error retry backoff&#x27;, &#x27;invalid brief&#x27;; LOR-21/22/23/24 scopes do not cover it)</td><td>file</td><td>human</td><td>LOR-26 (Backlog, Follow-Up, related to LOR-25)</td></tr></tbody></table></div></div>
+
+  <div class="card" id="decisions"><h2>Decisions &amp; rulings</h2><h3>Plan &mdash; Decisions taken (binding, from design review)</h3><div class="md"><p>Binding on the implementation phase. Each one says what was decided, what settled it, and what changes if it is reversed.</p><ul><li><strong>Architectural path, design doc + plan.</strong> linear-ship rule. Reversal: none (process).</li><li><strong>Only <code>InvalidBrief</code> is a <code>pipeline</code> failure.</strong> Analysis agent failures (budget, timeout, max turns, no result) stay <code>work</code>, and internal exceptions keep cursor-table row 10. Settled by the ticket (&quot;brief/schema validation failure&quot;) and spec §12 (agent failures are infra or work). Reversal: widening it, e.g. to &quot;agent succeeded but wrote no themes.json&quot;, would be one more <code>record_failure(..., &quot;pipeline&quot;)</code> call.</li><li><strong>A pipeline failure clears the counter; infra still leaves it unchanged.</strong> Settled by ticket cause 2 (&quot;or the failure class changes … go back to a full range&quot;) and spec row 6 (infra changes nothing). Reversal: leaving the counter unchanged would mean an earlier work episode can still split after the pipeline bug is fixed. That is the baqqetto failure mode.</li><li><strong>The counter is keyed on <code>(base, plugin version)</code>, and the version comes from <code>.claude-plugin/plugin.json</code> beside the code.</strong> A record without <code>plugin</code> (0.1.9 and earlier) never matches. Settled by the ticket&#x27;s acceptance (&quot;whatever counter state is left&quot;) and by the plugin being the only artifact that changes with a fix. Reversal: keying on a hash of the code instead would also catch unversioned local edits, at the cost of a less readable record.</li><li><strong><code>lastHead</code> keeps meaning &quot;the head that failed&quot; (cause 3 gets no code change of its own).</strong> For counted work failures that is what makes the search converge. The halving that went on after the trigger moved on is closed by decisions 3 and 4. Settled by spec §3 (each failure halves the range). Reversal: resetting <code>lastHead</code> to HEAD on every trigger would undo the binary search for real failures.</li><li><strong>Split point = the watched commit whose cumulative churn is closest to half the total.</strong> Candidates exclude the last watched commit and any slice that nets to no watched change. Churn is the per-commit first-parent <code>--numstat</code> diff, at least 1 per file. Settled by the ticket&#x27;s acceptance (weighted by churn, never an empty slice). Reversal: a count-based midpoint over watched commits only is the simpler fallback the ticket allows.</li><li><strong>&quot;One-commit range&quot; for skip means &quot;at most one first-parent commit carries watched changes&quot;.</strong> With decision 6 such a range has no non-empty split. Skip still needs two counted work failures under the same plugin version. Settled by the two acceptance lines together (never an empty slice, and skip only for a one-commit range). Reversal: splitting off the trivial prefix first costs two more failed analyses before the skip.</li><li><strong>The continuation runs in bash (<code>post-merge.sh</code>), not as a loop in Python.</strong> It runs once per invocation, gets a fresh agent, deadline and watchdog, and skips the gate. Settled by the deadline design: a remainder squeezed into the first run&#x27;s deadline would fail analysis as *work* and start counting again. The gate would defer the remainder because finalize reset the clock. Reversal: queuing it for the next trigger is the ticket&#x27;s other allowed option, but the symptom (&quot;nothing happened&quot;) stays.</li><li><strong>Continuation also follows a finalized skip that stopped short of HEAD.</strong> Same symptom, same mechanism. Settled by the ticket&#x27;s Expected section. Reversal: drop <code>&quot;skip&quot;</code> from <code>_finished</code>.</li><li><strong>Exit code 3 = <code>EXIT_CONTINUE</code>.</strong> 0 and 1 keep their meaning, and nothing else reads the code today (<code>run_ingest_v3</code>&#x27;s status was ignored). Reversal: a marker file. That is more state for no gain.</li><li><strong>Remove <code>run.py</code>&#x27;s &quot;no watched changes up to the split midpoint&quot; branch and <code>NO_CHANGE_THEME</code>.</strong> Decision 6 makes it unreachable. Reversal: keep it as a defensive branch, which leaves dead code with no test that can reach it.</li><li><strong>Version 0.1.9 → 0.1.10 in both manifests</strong>, standing user rule. The CHANGELOG gets a <code>[Unreleased]</code> → Fixed bullet.</li><li><strong>TDD exception, Task 5 only:</strong> documentation and manifest version text. There is no behaviour to test first. The existing <code>tests/lib/test_marketplace_manifest.py</code> guards that the two versions match.</li><li><strong>Design and plan are force-added (<code>git add -f</code>)</strong> because <code>docs/*</code> is gitignored. <code>.gitignore</code> is unchanged. If the human wants internal plans untracked, drop them from the PR with <code>git rm --cached</code> (run-log note N1).</li><li><strong>Self-approved gates (autonomous mode):</strong> the write-back of understanding and each design section were checked against the ticket. The written design was approved by the advisor (high). The plan review is this plan&#x27;s Self-Review.</li><li><strong>Out of scope:</strong> backoff for repeated pipeline errors (follow-up F1, not tracked in Linear); clearing skipped ranges (LOR-22, Backlog); splitting inside one merge commit (YAGNI).</li></ul></div><h3>Run log &mdash; Rulings</h3><ol class="ruling-list"><li>Ruling: Task 3 also rewords the skip log text (&quot;single-commit range&quot; in run.py hooks.log line and finalize.record_skip log.md entry/docstring) to describe a range whose watched changes sit in one first-parent commit — advisor spec-review advisory #1; under decision 7 a skip can span several commits, so the old wording misdescribes what was skipped — cost if wrong: a cosmetic string change, trivially reverted.</li><li>Task 2: Task 2: Ruling: e2e <code>test_split_lands_on_a_watched_commit_not_on_trivial_ones</code> asserts stages [&quot;analysis&quot;,&quot;recall&quot;,&quot;writer-b01&quot;] instead of the plan&#x27;s [&quot;analysis&quot;,&quot;recall&quot;] — a real split run writes pages, same as the range-run precedent at test_v3_run_e2e.py:80; the plan text was a defect — cost if wrong: one assertion line.</li><li>Ruling: Final-review Important 1 → narrow <code>pipeline</code>: an InvalidBrief whose errors include &quot;themes.json: missing or not valid JSON&quot; is recorded as <code>work</code> (the analysis agent produced no usable output, same as plan decision 2&#x27;s &quot;no result&quot; = work); schema/validator errors stay <code>pipeline</code> (ticket acceptance names brief/schema validation failures explicitly). Fix spec §12 sentence to match. F1 backoff follow-up still goes to the follow-up call — why: an indefinitely held cursor on a model mistake would contradict the ticket&#x27;s goal, and the baqqetto trace is schema-only, so narrowing does not reopen it — cost if wrong: one classification branch in run.py&#x27;s InvalidBrief handler.</li><li>Ruling: final fix wave also takes Minor 1 (commit_churn on a root commit), Minor 2 (stale-counter log wording), Minor 4 (V3_PY_PID reset), Minor 5 (spec row 4 wording); Minor 3 (continuation agent.log header shows the hook&#x27;s original range) is pre-existing and left as is — cost if wrong: a cosmetic log header.</li></ol></div>
+
+  <div class="card" id="verification"><h2>Verification</h2><div class="verify-grid"><div class="verify-col"><h4>Baseline &mdash; 2026-10-06 17:39 MDT</h4><div class="verify-row"><span class="k">Command</span><span class="v"><code>python3 -m pytest tests/ -q &amp;&amp; for f in tests/hooks/*.sh; do bash $f; done</code></span></div><div class="verify-row"><span class="k">Dependencies</span><span class="v">present</span></div><div class="verify-row"><span class="k">Result</span><span class="v"><span class="badge green">pass</span></span></div><div class="verify-row"><span class="k">Failures</span><span class="v">none</span></div></div><div class="verify-col"><h4>Final gate &mdash; 2026-10-06 18:49 MDT</h4><div class="verify-row"><span class="k">Command</span><span class="v"><code>python3 -m pytest tests/ -q &amp;&amp; for f in tests/hooks/*.sh; do bash $f; done</code></span></div><div class="verify-row"><span class="k">Result</span><span class="v"><span class="badge green">pass</span></span></div><div class="verify-row"><span class="k">Failures</span><span class="v">none</span></div></div></div><p class="note">Baseline had no reds, so there were no Baseline failures to fix in this run. No failure in the final gate is tagged new.</p></div>
+
+  <div class="card" id="timeline"><h2>Timeline</h2><p class="note">Phases, advisor calls, blockers and syncs from the run log, in chronological order. Times are local (MDT).</p><div class="timeline"><div class="tl-item"><div class="tl-time tabular">17:39:49</div><div class="tl-label"><b>preflight</b> &mdash; In Progress; branch existing, up to date with origin/main, clean; baseline 613 pytest + 14 bash suites green; no existing plan (docs/plans absent)</div></div><div class="tl-item"><div class="tl-time tabular">17:46:06</div><div class="tl-label"><b>plan</b> &mdash; advisor call #1: Spec review of docs/plans/2026-10-06-LOR-25-split-after-deterministic-failure-design.md &rarr; APPROVED (high)</div></div><div class="tl-item"><div class="tl-time tabular">17:52:14</div><div class="tl-label"><b>plan</b> &mdash; Plan ready; spec approved by advisor (high); plan comment posted</div></div><div class="tl-item"><div class="tl-time tabular">18:46:26</div><div class="tl-label"><b>implement</b> &mdash; 5/5 tasks reviewed clean; final review With fixes → one fix wave (5 findings) → re-review clean</div></div><div class="tl-item"><div class="tl-time tabular">18:49:38</div><div class="tl-label"><b>sync</b> &mdash; pre-push: up to date with origin/main (0 behind)</div></div><div class="tl-item"><div class="tl-time tabular">18:50:08</div><div class="tl-label"><b>finish</b> &mdash; verification green, pushed, PR opened</div></div><div class="tl-item"><div class="tl-time tabular">18:50:27</div><div class="tl-label"><b>linear</b> &mdash; In Review; completion comment posted; PR linked</div></div><div class="tl-item"><div class="tl-time tabular">18:50:27</div><div class="tl-label"><b>linear</b> &mdash; advisor call #2: Follow-up F1 (backoff for repeated pipeline errors): file, comment or skip? &rarr; file: &#x27;v3: back off repeated pipeline errors under one plugin version&#x27; (Backlog, Follow-Up, related to LOR-25) (medium)</div></div><div class="tl-item"><div class="tl-time tabular">18:51:04</div><div class="tl-label"><b>linear</b> &mdash; blocker #B1 raised: File follow-up F1 (backoff for repeated pipeline errors under one plugin version)?</div></div><div class="tl-item"><div class="tl-time tabular">18:55:41</div><div class="tl-label"><b>linear</b> &mdash; blocker #B1 resolved: Human: file it (after confirming 0.1.10 alone fixes the current baqqetto state) — filed LOR-26</div></div><div class="tl-item"><div class="tl-time tabular">18:55:42</div><div class="tl-label"><b>close-out</b> &mdash; B1 resolved by human: F1 filed as LOR-26; LOR-25 comment posted</div></div></div></div>
+
+  <div class="card" id="commits"><h2>Commits</h2><p class="note">Range <code>6175c13..HEAD</code>. No llake capture commits.</p><div class="table-scroll"><table><thead><tr><th>Commit</th><th>Message</th><th>Type</th><th class=num>Files</th></tr></thead><tbody><tr><td><code>4b8d90e</code></td><td>fix(ingest-v3): stale-counter log names the plugin pair only when it differs (LOR-25)</td><td><span class="badge gray">code — fix</span></td><td class=num>2</td></tr><tr><td><code>babf7d7</code></td><td>fix(ingest-v3): clear V3_PY_PID between continuation runs (LOR-25)</td><td><span class="badge gray">code — fix</span></td><td class=num>2</td></tr><tr><td><code>395abf7</code></td><td>fix(ingest-v3): commit churn of a root commit diffs against the empty tree (LOR-25)</td><td><span class="badge gray">code — fix</span></td><td class=num>2</td></tr><tr><td><code>f9931ce</code></td><td>fix(ingest-v3): a missing themes.json is an analysis work failure, not a pipeline error (LOR-25)</td><td><span class="badge gray">code — fix</span></td><td class=num>6</td></tr><tr><td><code>a6bd7c0</code></td><td>docs(ingest-v3): pipeline failures, churn split, continuation; bump 0.1.10 (LOR-25)</td><td><span class="badge gray">docs</span></td><td class=num>7</td></tr><tr><td><code>a8c801e</code></td><td>fix(ingest-v3): continue with the rest of the range after a finalized split (LOR-25)</td><td><span class="badge gray">code — fix</span></td><td class=num>3</td></tr><tr><td><code>57bd5b3</code></td><td>fix(ingest-v3): an invalid brief is a pipeline error; a finished split asks to continue (LOR-25)</td><td><span class="badge gray">code — fix</span></td><td class=num>4</td></tr><tr><td><code>f6f37c4</code></td><td>fix(ingest-v3): split at the churn midpoint, never on a slice without watched changes (LOR-25)</td><td><span class="badge gray">code — fix</span></td><td class=num>4</td></tr><tr><td><code>872c9b6</code></td><td>fix(ingest-v3): bind the failure counter to the plugin version; add the pipeline class (LOR-25)</td><td><span class="badge gray">code — fix</span></td><td class=num>4</td></tr><tr><td><code>99c090c</code></td><td>docs(LOR-25): design and plan</td><td><span class="badge gray">docs</span></td><td class=num>1</td></tr><tr><td><code>4758527</code></td><td>docs(LOR-25): design</td><td><span class="badge gray">docs</span></td><td class=num>1</td></tr></tbody></table></div></div>
+
+  <footer class="page-footer">LOR-25 run report &middot; generated 2026-10-06 18:55 MDT by linear-ship <code>scripts/report</code> from run-log, plan, git history and PR #21</footer>
+
+</div>
+</body>
+</html>

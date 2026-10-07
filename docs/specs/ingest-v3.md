@@ -78,7 +78,7 @@ finalize ($0): updated:, indexes, gap record, log entry, cursor + clock
 | Stage inputs | code | range, wiki | commit list, per-file patches, page catalog, change leads, analysis prompt | hold cursor |
 | Analysis | LLM | staged inputs; source and wiki on demand | brief files | hold cursor; work failures count toward a split |
 | Recall pass | LLM | themes, catalog, listed and ruled-out pages | extra pages for the brief | ignored; brief unchanged |
-| Assemble brief | code | brief files, hit index, gap record | validated brief | invalid brief: hold cursor, work failure |
+| Assemble brief | code | brief files, hit index, gap record | validated brief | brief fails validation: hold cursor, pipeline failure (counter cleared); no usable `themes.json`: hold cursor, analysis work failure |
 | Bundle | code | brief | bundles in dispatch order | — |
 | Writers | LLM | shared prefix + bundle part | edited pages, writer status, snapshot, diff | revert bundle, retry as singletons, then `writer-failed` gap |
 | Verifier (off) | LLM | bundle pages, diff | findings | `unverified` gap |
@@ -91,10 +91,10 @@ finalize ($0): updated:, indexes, gap record, log entry, cursor + clock
 | Kind | When | What runs |
 |---|---|---|
 | Range run | the **commit range** has watched changes | every stage; carried gaps join the brief |
-| Split run | analysis failed twice with work failures on this base | a range run over base..midpoint (§3) |
+| Split run | analysis failed twice with work failures on this base, same plugin version | a range run over base..split point (§3); the remainder runs next in the same invocation |
 | Gap-only run | no watched changes, open non-stuck major gaps | no analysis; writers on the carried major gaps only |
 | Empty | no watched changes, nothing major owed | cursor and clock advance; no agent |
-| Skip | a single-commit range failed analysis twice | cursor advances with a `ranges[]` entry; no agent |
+| Skip | the range's watched changes sit in one first-parent commit and it failed analysis twice | cursor advances with a `ranges[]` entry; no agent; the remainder runs next in the same invocation |
 
 **Write order** at finalize: pages → indexes → gap record → log entry → cursor and clock. A crash at any point leaves the cursor on the old base, so the next run redoes the range; pages already corrected stay correct.
 
@@ -104,9 +104,9 @@ finalize ($0): updated:, indexes, gap record, log entry, cursor + clock
 
 **Run journal.** Each run keeps `run.json` in its agent dir: the run kind, base and head, the pages in flight with their snapshot location, and a `finalized` flag. At start, v3 scans the journals of earlier runs. A run that is not finalized and has pages in flight died mid-write: its in-flight pages are restored from their snapshots (pages it created are deleted). Its cursor was never advanced, so its range is ingested again.
 
-**Failure counter.** `.state/ingest-failures.json` holds `{base, count}`. Analysis work failures (including an invalid brief) on the same base increment it; infra failures do not (§12). A finalized run clears it.
+**Failure counter.** `.state/ingest-failures.json` holds `{base, count, lastHead, plugin}`. It applies only while `base` is the current cursor and `plugin` is the running plugin version; a record from another version (or one without `plugin`) is ignored, so the first run after an upgrade plans the full range. Analysis work failures increment it and set `lastHead` to the head that failed; infra failures do not change it (§12). A brief that fails schema validation at assembly is a **pipeline failure**: deterministic, it fails the same on any range, so it holds the cursor and clears the counter instead of counting. A missing or unparseable `themes.json` is the analysis agent producing no usable output, so it counts as an analysis work failure. A finalized run clears it.
 
-**Range split.** When the counter reaches 2 for the current base, the next run ingests base..midpoint, where the midpoint is the middle commit of the first-parent chain. On success the cursor advances to the midpoint and the rest of the range follows on the next merge. A range of one commit cannot shrink: after two work failures it is skipped. The cursor advances past it, and the gap record gets a `ranges[]` entry with cause `analysis-failed` and the range's $0 hit lines as leads, so a human can see what was not ingested.
+**Range split.** When the counter reaches 2, the next run ingests base..split point over the range base..`lastHead`. The split point is the first-parent commit whose cumulative watched churn (added + deleted lines under `ingest.include`, per commit against its first parent, so a merge counts its branch's content) is closest to half the total. It is never the last commit with watched changes, and never a commit where base..commit nets to no watched change, so neither half is empty. On success the cursor advances to the split point and the run exits 3; `post-merge.sh` then runs the rest of the range at once, under the same lock, as a fresh run with its own deadline (once per invocation; the gate is not consulted again). A range whose watched changes sit in one first-parent commit cannot shrink: after two work failures it is skipped. The cursor advances past it, and the gap record gets a `ranges[]` entry with cause `analysis-failed` and the range's $0 hit lines as leads, so a human can see what was not ingested; the rest of the range follows in the same invocation as above.
 
 ## 4. Removed names, hit index and change leads
 
@@ -401,7 +401,7 @@ Carried gaps resolved: [[page]], ...
 
 A gap-only run's heading reads `gap-only at <head7>` and says "No new range: carried gaps only."
 
-**Failure classes.** An agent failure is **infra** when the CLI reports a rate limit, overload, auth or network error, when the stream shows a rejected rate-limit event, or when the agent produced no first turn. Anything else (budget, timeout, max turns, invalid output) is **work**. An infra failure during writing stops further dispatch: in-flight bundles are reverted and every unwritten page becomes an `infra` gap. Across the downstream sweep there were 2 infra events and 0 work failures.
+**Failure classes.** An agent failure is **infra** when the CLI reports a rate limit, overload, auth or network error, when the stream shows a rejected rate-limit event, or when the agent produced no first turn. Anything else (budget, timeout, max turns, no usable output) is **work**; a missing or unparseable `themes.json` at assembly counts as an analysis work failure. A brief that fails schema validation at assembly is a **pipeline** failure (§3): it holds the cursor, clears the counter and is logged as `pipeline error`. An infra failure during writing stops further dispatch: in-flight bundles are reverted and every unwritten page becomes an `infra` gap. Across the downstream sweep there were 2 infra events and 0 work failures.
 
 **Cursor.** The **ingest cursor** means "accounted for": every change up to it is reflected in the wiki or owed in the gap record.
 
@@ -410,10 +410,11 @@ A gap-only run's heading reads `gap-only at <head7>` and says "No new range: car
 | 1 | No watched changes, nothing major owed | advances to head | clock reset |
 | 2 | No watched changes, major gaps owed | advances to head after the gap-only run | clock reset |
 | 3 | Range run finalized, with or without gaps | advances to head | counter cleared |
-| 4 | Split run finalized | advances to the midpoint | counter cleared |
-| 5 | Analysis or brief work failure | holds | counter +1 |
+| 4 | Split run finalized | advances to the split point | counter cleared; the remainder runs next in the same invocation |
+| 5 | Analysis work failure, including no usable `themes.json` | holds | counter +1 (same base and plugin version) |
+| 5b | Brief fails validation at assembly (pipeline failure) | holds | counter cleared |
 | 6 | Analysis infra failure | holds | counter unchanged |
-| 7 | Single-commit range failed twice | advances past it | `ranges[]` entry |
+| 7 | Range with one watched first-parent commit failed twice | advances past it | `ranges[]` entry; the remainder runs next |
 | 8 | Writer, fixer or verifier failure; run cap; deadline after analysis; infra during writing | advances | gaps recorded |
 | 9 | User kill or crash before finalize | holds | kill: run's writes reverted; crash: journal recovery next run |
 | 10 | Finalize fails | holds | next run redoes the range |
@@ -572,6 +573,6 @@ No action in this effort. Candidates for a later look:
 - prompt templates: analysis, recall, writer shared prefix, writer bundle part, verifier;
 - JSON schemas: brief, writer status, verifier findings, gap record.
 
-**Tests the plan must include:** range split and single-commit skip; stuck after 3 attempts; infra/work classification; journal recovery after a mid-write crash; the cursor table rows; run-cap reservation; renderer strictness for every new placeholder; bash 3.2 portability of shell code.
+**Tests the plan must include:** range split and one-watched-commit skip; stuck after 3 attempts; infra/work classification; journal recovery after a mid-write crash; the cursor table rows; run-cap reservation; renderer strictness for every new placeholder; bash 3.2 portability of shell code.
 
 **Touch points:** doctor validates `llake/ingest-gaps.json` and reports stuck gaps and `ranges[]` entries; bootstrap resets the gap record; `ingest.v3.*` defaults go into `templates/config.default.json`; the plugin version is bumped in `plugin.json` and `marketplace.json`.

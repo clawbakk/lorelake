@@ -248,7 +248,7 @@ def finalize(state, cfg, brief, agent_id, base, head, kind, today=None, now=None
 
 
 def record_skip(state, agent_id, base, head, leads, today=None, now=None):
-    """Cursor-table row 7: a single-commit range failed analysis twice; advance past it, recorded."""
+    """Cursor-table row 7: a range with one watched commit failed analysis twice; advance past it, recorded."""
     today = today or time.strftime("%Y-%m-%d")
     leads = [str(l) for l in leads or [] if str(l).strip()] or [NO_LEADS]
     will_write = _will_write(state)
@@ -259,7 +259,7 @@ def record_skip(state, agent_id, base, head, leads, today=None, now=None):
     will_write(gaps.GAPS_FILE)
     gaps.save(state.llake, doc)
     entry = ("\n## [{d}] ingest | {b}..{h}: v3 — skipped: analysis failed twice\n\nAgent `{a}`. This "
-             "single-commit range was not ingested. It is recorded under `ranges` in `llake/ingest-gaps.json` "
+             "range with one watched commit was not ingested. It is recorded under `ranges` in `llake/ingest-gaps.json` "
              "with its leads:\n\n").format(d=today, b=base[:7], h=head[:7], a=agent_id)
     entry += "\n".join("- " + l for l in leads[:SKIP_LOG_LEADS]) + "\n"
     if len(leads) > SKIP_LOG_LEADS:
