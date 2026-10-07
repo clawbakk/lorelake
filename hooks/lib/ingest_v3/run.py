@@ -1,4 +1,5 @@
 """The ingest v3 orchestrator (spec §2, design §5). Exit 0: finalized, or nothing to do. Exit 1: the cursor holds.
+Exit 3 (EXIT_CONTINUE): a split or skip finalized short of HEAD; post-merge.sh runs the remainder at once.
 
 One run: recover dead runs → plan → (empty | skip) or pre-run copy → inputs → analysis → recall → brief →
 bundles → writers → checks → fix round → checks → finalize → report. Every outcome writes exactly one
@@ -33,6 +34,7 @@ from .schema import load_schema, validate
 from .state import RunState
 
 STOP_STAGES = ("analysis", "recall", "brief", "bundle", "write", "fix")
+EXIT_CONTINUE = 3  # a finalized split or skip stopped short of HEAD: the hook continues with the remainder (§3)
 
 
 class HoldRun(Exception):
@@ -238,6 +240,17 @@ def _log_unrecovered(llake, agent_dir, log):
                 aid, ", ".join(str(p) for p in j["unrecovered"])))
 
 
+def _finished(project, rp, log):
+    """0, or EXIT_CONTINUE when a finalized split or skip left the cursor short of HEAD."""
+    if rp.kind not in ("split", "skip"):
+        return 0
+    now = git(project, "rev-parse", "HEAD").strip()
+    if now == rp.head:
+        return 0
+    log.line("remainder {}..{} pending: continuing in this invocation".format(rp.head[:7], now[:7]))
+    return EXIT_CONTINUE
+
+
 def run(project_root, agent_id, agent_dir, deadline, environ=None, today=None, clock=time.time):
     prev = _install_kill_handlers()
     try:
@@ -270,6 +283,10 @@ def _run(project_root, agent_id, agent_dir, deadline, environ, today, clock):
         _log_unrecovered(llake, agent_dir, log)
         base = read_text(os.path.join(llake, "last-ingest-sha")).strip()
         head = git(project, "rev-parse", "HEAD").strip()
+        stale = plan.load_failures(llake)
+        if stale and not plan.active_failures(llake, base):
+            log.line("failure counter ignored (plugin {} -> {}, base {}): planning without it".format(
+                stale.get("plugin") or "unrecorded", plan.plugin_version(), str(stale.get("base") or "")[:7]))
         rp = plan.plan_run(project, llake, include, base, head)
         state = RunState(project, agent_dir)
         state.journal.update({"kind": rp.kind, "base": base, "head": rp.head})
@@ -287,9 +304,9 @@ def _run(project_root, agent_id, agent_dir, deadline, environ, today, clock):
         if rp.kind == "skip":
             n = names.derive(project, base, rp.head, include)
             record_skip(state, agent_id, base, rp.head, names.hit_leads(names.wiki_hits(llake, n["removed"])), today)
-            hooks_log(llake, "skipped: single-commit range {}..{} failed analysis twice (agent {} v3)".format(
+            hooks_log(llake, "skipped: range with one watched commit {}..{} failed analysis twice (agent {} v3)".format(
                 base[:7], rp.head[:7], agent_id))
-            return 0
+            return _finished(project, rp, log)
 
         git_before = git_status_outside_llake(project)
         inputs = os.path.join(agent_dir, "inputs")
@@ -311,8 +328,10 @@ def _run(project_root, agent_id, agent_dir, deadline, environ, today, clock):
         try:
             brief = assemble(agent_dir, llake, rp.head, gap_only=gap_only)
         except InvalidBrief as exc:
-            plan.record_failure(llake, base, rp.head, "work")
-            raise HoldRun("invalid brief: " + "; ".join(exc.errors[:3]))
+            # deterministic: the same brief fails on any range, so it never counts toward split or skip
+            plan.record_failure(llake, base, rp.head, "pipeline")
+            raise HoldRun("pipeline error: invalid brief: {} (not counted toward split)".format(
+                "; ".join(exc.errors[:3])))
         _stop(stop_after, "brief", log)
         bundles = make_bundles(brief["pages"], llake, cfg.get("bundleMaxPages"), float(cfg.get("bundleMaxWeight")),
                                _since_rank(project, brief))
@@ -341,7 +360,7 @@ def _run(project_root, agent_id, agent_dir, deadline, environ, today, clock):
         hooks_log(llake, "completed: agent {} v3 {} (updated {}, created {}, gaps {}/{} major, ${:.2f}, sha {})".format(
             agent_id, rp.kind, len(summary["updated"]), len(summary["created"]), summary["gaps"],
             summary["major_gaps"], state.spent, rp.head[:7]))
-        return 0
+        return _finished(project, rp, log)
     except HoldRun as exc:
         log.line("HOLD: {}".format(exc))
         hooks_log(llake, "held: agent {} v3 ({}) — cursor held".format(agent_id, exc))

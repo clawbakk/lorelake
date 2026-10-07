@@ -128,11 +128,52 @@ def test_analysis_work_failure_holds_row_5(tmp_path, stages, monkeypatch):
     assert "held: agent run-1 v3 (analysis work failure" in hooks(repo)
 
 
-def test_invalid_brief_is_a_work_failure(tmp_path, stages, monkeypatch):
+INVALID_BRIEF = '[{"path": "llake/wiki/arch/client.md"}]'
+
+
+def test_invalid_brief_is_a_pipeline_error_not_counted(tmp_path, stages, monkeypatch):
     repo, base, shas = project(tmp_path)
-    monkeypatch.setenv("V3_STUB_BRIEF", '[{"path": "llake/wiki/arch/client.md"}]')
+    monkeypatch.setenv("V3_STUB_BRIEF", INVALID_BRIEF)
     assert go(repo) == 1
-    assert cursor(repo) == base and load_json(str(repo / "llake/.state/ingest-failures.json"))["count"] == 1
+    assert cursor(repo) == base
+    assert not (repo / "llake/.state/ingest-failures.json").exists()
+    assert "held: agent run-1 v3 (pipeline error: invalid brief:" in hooks(repo)
+    assert "(not counted toward split)" in (repo / "llake/.state/agents/run-1/agent.log").read_text()
+
+
+def test_held_invalid_briefs_then_fixed_brief_ingest_the_whole_range(tmp_path, stages, monkeypatch):
+    """LOR-25 regression: three runs held on a brief validation error, then the fix -> one range run over
+    the full held range."""
+    repo, base, shas = project(tmp_path, commits=4)
+    monkeypatch.setenv("V3_STUB_BRIEF", INVALID_BRIEF)
+    for i in range(3):
+        assert go(repo, agent="held-{}".format(i)) == 1
+        assert cursor(repo) == base
+    monkeypatch.setenv("V3_STUB_BRIEF", BRIEF)
+    assert go(repo, agent="fixed") == 0
+    assert cursor(repo) == shas[-1]
+    assert load_json(str(repo / "llake/.state/agents/fixed/run.json"))["kind"] == "range"
+    assert "ingest | {}..{}: v3 — 1 updated".format(base[:7], shas[-1][:7]) in (repo / "llake/log.md").read_text()
+    assert "completed: agent fixed v3 range" in hooks(repo)
+
+
+def test_counter_from_an_older_plugin_plans_the_full_range(tmp_path, stages, monkeypatch):
+    repo, base, shas = project(tmp_path, commits=4)
+    dump_json(str(repo / "llake/.state/ingest-failures.json"), {"base": base, "count": 3, "lastHead": shas[1]})
+    monkeypatch.setenv("V3_STUB_BRIEF", BRIEF)
+    assert go(repo) == 0
+    assert cursor(repo) == shas[-1]
+    assert "failure counter ignored (plugin unrecorded" in \
+        (repo / "llake/.state/agents/run-1/agent.log").read_text()
+    assert "completed: agent run-1 v3 range" in hooks(repo)
+
+
+def test_skip_short_of_head_continues(tmp_path, stages):
+    repo, base, shas = project(tmp_path, commits=2)
+    seed_failures(repo, base, 2, shas[0])
+    assert go(repo) == run.EXIT_CONTINUE
+    assert cursor(repo) == shas[0]
+    assert "range with one watched commit" in hooks(repo)
 
 
 def test_analysis_infra_failure_holds_without_counting_row_6(tmp_path, stages, monkeypatch):
@@ -146,7 +187,9 @@ def test_split_run_advances_to_midpoint_row_4(tmp_path, stages, monkeypatch):
     repo, base, shas = project(tmp_path, commits=4)
     seed_failures(repo, base, 2, shas[-1])
     monkeypatch.setenv("V3_STUB_BRIEF", BRIEF)
-    assert go(repo) == 0
+    assert go(repo) == run.EXIT_CONTINUE
+    assert "remainder {}..{} pending".format(shas[1][:7], shas[-1][:7]) in \
+        (repo / "llake/.state/agents/run-1/agent.log").read_text()
     assert cursor(repo) == shas[1]
     assert not (repo / "llake/.state/ingest-failures.json").exists()
     assert "{}..{}: v3".format(base[:7], shas[1][:7]) in (repo / "llake/log.md").read_text()
@@ -328,7 +371,7 @@ def test_split_lands_on_a_watched_commit_not_on_trivial_ones(tmp_path, stages):
     c3 = commit(repo, {"src/app.py": "def loadProfile():\n    return 1\n"}, "rename")
     c4 = commit(repo, {"src/app.py": "def loadProfile():\n    return 2\n"}, "tweak")
     seed_failures(repo, base, 2, c4)
-    assert go(repo) == 0
+    assert go(repo) == run.EXIT_CONTINUE
     assert cursor(repo) == c3 and stages() == ["analysis", "recall", "writer-b01"]
     assert "ingest | {}..{}: v3".format(base[:7], c3[:7]) in (repo / "llake/log.md").read_text()
     assert not (repo / "llake/.state/ingest-failures.json").exists()

@@ -63,7 +63,8 @@ def build_parser():
     p.add_argument("--project-root", required=True)
     p.add_argument("--agent-dir", required=True)
     p.set_defaults(func=cmd_revert_run)
-    p = sub.add_parser("run", help="run ingest v3 once (called by hooks/lib/ingest-v3.sh)")
+    p = sub.add_parser("run", help="run ingest v3 once (called by hooks/lib/ingest-v3.sh); exit 0 done, "
+                                   "1 cursor held, 3 split/skip finalized short of HEAD (continue)")
     p.add_argument("--project-root", required=True)
     p.add_argument("--agent-id", required=True)
     p.add_argument("--agent-dir", required=True)
