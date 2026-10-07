@@ -63,21 +63,57 @@ def watched_changes(repo, base, head, include):
     return bool(git(repo, "diff", "--name-only", base, head, "--", *include).strip())
 
 
+def commit_churn(repo, sha, include):
+    """Watched churn of one commit against its first parent: added + deleted lines, at least 1 per file (a pure
+    rename or a binary file counts 1). For a merge commit this is the merged branch's content."""
+    out = git(repo, "diff", "--numstat", sha + "^1", sha, "--", *include)
+    total = 0
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        added, deleted = parts[0], parts[1]
+        n = int(added) + int(deleted) if added.isdigit() and deleted.isdigit() else 0
+        total += max(n, 1)
+    return total
+
+
+def split_point(repo, base, target, include):
+    """The split head for base..target (spec §3): the watched first-parent commit whose cumulative churn is
+    closest to half the total, ties to the earlier. Never the last watched commit (the remainder keeps watched
+    content) and never a commit where base..commit nets to no watched change. None when the range cannot
+    shrink: at most one first-parent commit carries watched changes."""
+    commits = list(reversed(first_parent_chain(repo, base, target)))
+    watched = [(c, w) for c, w in ((c, commit_churn(repo, c, include)) for c in commits) if w > 0]
+    if len(watched) < 2:
+        return None
+    total = sum(w for _, w in watched)
+    best, best_d, cum = None, None, 0
+    for c, w in watched[:-1]:
+        cum += w
+        if not watched_changes(repo, base, c, include):
+            continue
+        d = abs(2 * cum - total)
+        if best is None or d < best_d:
+            best, best_d = c, d
+    return best
+
+
 def plan_run(repo, llake_root, include, base, head):
     if not watched_changes(repo, base, head, include):
         return RunPlan("gap-only" if gaps.owed_major(gaps.load(llake_root)) else "empty", head)
     f = active_failures(llake_root, base)
-    if int(f.get("count", 0)) >= SPLIT_AFTER_FAILURES:
-        target = f.get("lastHead") or head
-        try:
-            chain = first_parent_chain(repo, base, target)
-        except RuntimeError:
-            target, chain = head, first_parent_chain(repo, base, head)
-        if not chain:
-            return RunPlan("range", head)
-        if len(chain) == 1:
-            return RunPlan("skip", target)
-        return RunPlan("split", chain[len(chain) // 2])
+    if int(f.get("count", 0)) < SPLIT_AFTER_FAILURES:
+        return RunPlan("range", head)
+    target = f.get("lastHead") or head
+    try:
+        point = split_point(repo, base, target, include)
+    except RuntimeError:  # lastHead no longer resolves (rewritten history): work from the trigger head
+        target, point = head, split_point(repo, base, head, include)
+    if point is not None:
+        return RunPlan("split", point)
+    if watched_changes(repo, base, target, include):
+        return RunPlan("skip", target)
     return RunPlan("range", head)
 
 

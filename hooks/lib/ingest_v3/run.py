@@ -33,8 +33,6 @@ from .schema import load_schema, validate
 from .state import RunState
 
 STOP_STAGES = ("analysis", "recall", "brief", "bundle", "write", "fix")
-NO_CHANGE_THEME = {"id": "T0", "title": "no watched changes up to the split midpoint",
-                   "summary": "The split range holds no watched changes; only carried gaps can be worked."}
 
 
 class HoldRun(Exception):
@@ -298,12 +296,7 @@ def _run(project_root, agent_id, agent_dir, deadline, environ, today, clock):
         gap_only = rp.kind == "gap-only"
         if gap_only:
             names.write_empty_inputs(inputs)
-        elif not plan.watched_changes(project, base, rp.head, include):
-            # A split midpoint can precede every watched change: nothing to analyse, carried gaps still ride.
-            names.write_empty_inputs(inputs)
-            dump_json(os.path.join(agent_dir, "brief", "themes.json"), [NO_CHANGE_THEME])
-            log.line("no watched changes in {}..{}: analysis and recall skipped".format(base[:7], rp.head[:7]))
-        else:
+        else:  # a range or split head always has watched changes (plan.split_point never picks an empty slice)
             names.write_inputs(project, base, rp.head, include, llake, inputs)
             staged = stage.stage_inputs(project, base, rp.head, include, llake, agent_dir)
             if frozen:

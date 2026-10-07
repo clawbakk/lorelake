@@ -321,17 +321,16 @@ def test_dir_rule_refuses_an_agent_dir_outside_the_agents_dir(tmp_path):
         run._dir_rule(state, str(repo / "llake/wiki/arch"))
 
 
-def test_split_midpoint_without_watched_changes_finalizes(tmp_path, stages):
+def test_split_lands_on_a_watched_commit_not_on_trivial_ones(tmp_path, stages):
     repo, base, _ = project(tmp_path, commits=0)
     commit(repo, {"README.md": "one\n"}, "docs 1")
-    c2 = commit(repo, {"README.md": "two\n"}, "docs 2")
-    commit(repo, {"src/app.py": "def loadProfile():\n    return 1\n"}, "rename")
+    commit(repo, {"README.md": "two\n"}, "docs 2")
+    c3 = commit(repo, {"src/app.py": "def loadProfile():\n    return 1\n"}, "rename")
     c4 = commit(repo, {"src/app.py": "def loadProfile():\n    return 2\n"}, "tweak")
     seed_failures(repo, base, 2, c4)
     assert go(repo) == 0
-    assert cursor(repo) == c2 and stages() == []
-    assert "ingest | {}..{}: v3 — 0 updated, 0 created, 0 gaps (0 major)".format(base[:7], c2[:7]) in \
-        (repo / "llake/log.md").read_text()
+    assert cursor(repo) == c3 and stages() == ["analysis", "recall", "writer-b01"]
+    assert "ingest | {}..{}: v3".format(base[:7], c3[:7]) in (repo / "llake/log.md").read_text()
     assert not (repo / "llake/.state/ingest-failures.json").exists()
     assert "completed: agent run-1 v3 split" in hooks(repo)
 

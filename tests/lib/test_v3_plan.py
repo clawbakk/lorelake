@@ -192,3 +192,75 @@ def test_recovery_with_missing_snapshot_copy_leaves_page_and_run_unrecovered(tmp
     j = load_json(str(dead / "run.json"))
     assert not j.get("recovered") and "wiki/a/x.md" in j["inFlight"]
     assert "wiki/a/x.md" in j["unrecovered"]
+
+
+def merge_repo(tmp_path):
+    """Baqqetto's shape: base -> a trivial direct commit -> a --no-ff merge carrying all watched content.
+    First-parent chain of base..merge is [merge, trivial]."""
+    repo = make_project(tmp_path)
+    base = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "checkout", "-q", "-b", "feature")
+    commit(repo, {"src/a.py": "a\n" * 50}, "feature 1")
+    commit(repo, {"src/b.py": "b\n" * 50}, "feature 2")
+    git(repo, "checkout", "-q", "main")
+    trivial = commit(repo, {"package.json": "{}\n"}, "bump")
+    git(repo, "merge", "-q", "--no-ff", "-m", "merge feature", "feature")
+    merge = git(repo, "rev-parse", "HEAD").strip()
+    return str(repo), str(repo / "llake"), base, trivial, merge
+
+
+def test_commit_churn_counts_a_merge_by_its_first_parent_diff(tmp_path):
+    repo, llake, base, trivial, merge = merge_repo(tmp_path)
+    assert plan.commit_churn(repo, trivial, ["src/"]) == 0
+    assert plan.commit_churn(repo, merge, ["src/"]) == 100
+
+
+def test_commit_churn_counts_a_pure_rename(tmp_path):
+    repo = make_project(tmp_path, src={"src/app.py": "x = 1\n"})
+    git(repo, "mv", "src/app.py", "src/main.py")
+    git(repo, "commit", "-q", "-m", "rename")
+    sha = git(repo, "rev-parse", "HEAD").strip()
+    assert plan.commit_churn(str(repo), sha, ["src/"]) >= 1
+
+
+def test_split_never_lands_on_a_slice_without_watched_changes(tmp_path):
+    repo, llake, base, trivial, merge = merge_repo(tmp_path)
+    assert plan.split_point(repo, base, merge, ["src/"]) is None
+    plan.record_failure(llake, base, merge, "work")
+    assert plan.plan_run(repo, llake, ["src/"], base, merge) == ("range", merge)
+    plan.record_failure(llake, base, merge, "work")
+    assert plan.plan_run(repo, llake, ["src/"], base, merge) == ("skip", merge)
+
+
+def test_baqqetto_shape_after_pipeline_failures_is_a_full_range(tmp_path):
+    repo, llake, base, trivial, merge = merge_repo(tmp_path)
+    for _ in range(3):
+        plan.record_failure(llake, base, merge, "pipeline")
+    assert plan.plan_run(repo, llake, ["src/"], base, merge) == ("range", merge)
+
+
+def test_split_point_is_weighted_by_churn(tmp_path):
+    repo = make_project(tmp_path)
+    base = git(repo, "rev-parse", "HEAD").strip()
+    commit(repo, {"src/a.py": "a\n"}, "small 1")
+    commit(repo, {"src/b.py": "b\n"}, "small 2")
+    big = commit(repo, {"src/c.py": "c\n" * 100}, "big")
+    last = commit(repo, {"src/d.py": "d\n" * 100}, "last")
+    # by commit count the midpoint would be "small 2"; by churn it is "big"
+    assert plan.split_point(str(repo), base, last, ["src/"]) == big
+
+
+def test_split_skips_a_candidate_whose_slice_nets_to_nothing(tmp_path):
+    repo = make_project(tmp_path, src={"src/app.py": "x = 1\n"})
+    base = git(repo, "rev-parse", "HEAD").strip()
+    change = commit(repo, {"src/app.py": "x = 2\n"}, "change")
+    commit(repo, {"src/app.py": "x = 1\n"}, "revert")  # base..revert nets to no watched change
+    more = commit(repo, {"src/c.py": "c\n" * 10}, "more")
+    assert plan.split_point(str(repo), base, more, ["src/"]) == change
+
+
+def test_unresolvable_last_head_splits_from_head(tmp_path):
+    repo, llake, base, shas = chain_repo(tmp_path, 4)
+    dump_json(llake + "/.state/ingest-failures.json",
+              {"base": base, "count": 2, "lastHead": "0" * 40, "plugin": plugin_version()})
+    assert plan.plan_run(repo, llake, ["src/"], base, shas[-1]) == ("split", shas[1])
