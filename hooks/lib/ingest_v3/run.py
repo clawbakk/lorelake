@@ -285,8 +285,10 @@ def _run(project_root, agent_id, agent_dir, deadline, environ, today, clock):
         head = git(project, "rev-parse", "HEAD").strip()
         stale = plan.load_failures(llake)
         if stale and not plan.active_failures(llake, base):
-            log.line("failure counter ignored (plugin {} -> {}, base {}): planning without it".format(
-                stale.get("plugin") or "unrecorded", plan.plugin_version(), str(stale.get("base") or "")[:7]))
+            was, now, at = stale.get("plugin") or "unrecorded", plan.plugin_version(), str(stale.get("base") or "")[:7]
+            why = "plugin {} -> {}, base {}".format(was, now, at) if was != now else \
+                "base {}, cursor {}".format(at, base[:7])
+            log.line("failure counter ignored ({}): planning the full range".format(why))
         rp = plan.plan_run(project, llake, include, base, head)
         state = RunState(project, agent_dir)
         state.journal.update({"kind": rp.kind, "base": base, "head": rp.head})

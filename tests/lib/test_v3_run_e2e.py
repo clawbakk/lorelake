@@ -178,7 +178,20 @@ def test_counter_from_an_older_plugin_plans_the_full_range(tmp_path, stages, mon
     assert cursor(repo) == shas[-1]
     assert "failure counter ignored (plugin unrecorded" in \
         (repo / "llake/.state/agents/run-1/agent.log").read_text()
+    assert "planning the full range" in (repo / "llake/.state/agents/run-1/agent.log").read_text()
     assert "completed: agent run-1 v3 range" in hooks(repo)
+
+
+def test_counter_for_another_base_logs_without_a_plugin_pair(tmp_path, stages, monkeypatch):
+    repo, base, shas = project(tmp_path, commits=2)
+    seed_failures(repo, "0" * 40, 3, shas[0])
+    monkeypatch.setenv("V3_STUB_BRIEF", BRIEF)
+    assert go(repo) == 0
+    line = [ln for ln in (repo / "llake/.state/agents/run-1/agent.log").read_text().splitlines()
+            if "failure counter ignored (" in ln]
+    assert len(line) == 1
+    assert "failure counter ignored (base 0000000, cursor {})".format(base[:7]) in line[0]
+    assert "->" not in line[0] and line[0].endswith("planning the full range")
 
 
 def test_skip_short_of_head_continues(tmp_path, stages):
