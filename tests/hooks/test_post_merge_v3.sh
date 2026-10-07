@@ -335,13 +335,14 @@ test_v3_next_agent_repoints_trap_globals() {
     AGENTS_DIR="$tmp"; MY_PID=4242
     # shellcheck source=../../hooks/lib/ingest-v3.sh
     source "$REPO_ROOT/hooks/lib/ingest-v3.sh"
+    V3_PY_PID=999  # the previous run's (exited, maybe reused) python PID
     next_v3_agent
-    echo "$V3_AGENT_ID|$V3_AGENT_DIR|$AGENT_LOG|$CURRENT_PID_FILE|$LLAKE_AGENT_ID|$(cat "$V3_PID_FILE")|$tmp"
+    echo "$V3_AGENT_ID|$V3_AGENT_DIR|$V3_AGENT_LOG|$AGENT_LOG|$CURRENT_PID_FILE|$LLAKE_AGENT_ID|$(cat "$V3_PID_FILE")|py=${V3_PY_PID:-}|$tmp"
     rm -rf "$tmp"
   )
   local tmp="${out##*|}"
   assert_eq "next_agent_globals" \
-    "next-agent-1|$tmp/next-agent-1|$tmp/next-agent-1/agent.log|$tmp/next-agent-1/orchestrator.pid|next-agent-1|4242|$tmp" \
+    "next-agent-1|$tmp/next-agent-1|$tmp/next-agent-1/agent.log|$tmp/next-agent-1/agent.log|$tmp/next-agent-1/orchestrator.pid|next-agent-1|4242|py=|$tmp" \
     "$out"
 }
 

@@ -69,6 +69,7 @@ next_v3_agent() {
   AGENT_LOG="$V3_AGENT_LOG"
   CURRENT_PID_FILE="$V3_PID_FILE"
   LLAKE_AGENT_ID="$V3_AGENT_ID"
+  V3_PY_PID=  # the last run's python has exited; its PID may be reused before the next run starts
 }
 
 # The post-merge lock under v3. acquire_post_merge_lock records `$$`, which inside the `( … ) &` run
