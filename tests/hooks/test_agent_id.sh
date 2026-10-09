@@ -17,9 +17,9 @@ test_id_format() {
   source "$REPO_ROOT/hooks/lib/agent-id.sh"
   local id
   id=$(generate_agent_id)
-  if [[ ! "$id" =~ ^[a-z]+-[a-z]+-[0-9]{6}-[0-9a-f]{4}$ ]]; then
+  if [[ ! "$id" =~ ^[0-9]{8}-[0-9]{6}-[a-z]+-[a-z]+-[0-9a-f]{4}$ ]]; then
     FAIL=$((FAIL+1)); FAILED_NAMES+=("agent_id_format")
-    echo "  FAIL [agent_id_format]: id '$id' does not match expected pattern <adj>-<noun>-HHMMSS-xxxx"
+    echo "  FAIL [agent_id_format]: id '$id' does not match expected pattern YYYYMMDD-HHMMSS-<adj>-<noun>-xxxx"
   else
     PASS=$((PASS+1))
   fi
