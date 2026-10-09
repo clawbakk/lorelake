@@ -1,16 +1,17 @@
 """Run planning (spec §3): run kinds, the analysis failure counter, range split and skip, dead-run recovery.
 
-Failure counter, .state/ingest-failures.json: {base, count, lastHead}. Work failures on the same base
-increment it and record the head that failed; infra failures change nothing. With count >= 2 the next
-run targets the first-parent chain of base..lastHead (newest first): one commit -> skip; more -> split
-to chain[len // 2], which is strictly older than lastHead, so each failure halves the range.
+Failure counter, .state/ingest-failures.json: {base, count, lastHead, plugin}. It applies only while its base
+and plugin version match the current ones. Work failures increment it and record the head that failed;
+infra failures change nothing; a pipeline failure (an invalid brief: deterministic, fails the same on any
+range) clears it. With count >= 2 the next run splits base..lastHead at its churn midpoint (split_point); a
+range whose watched changes sit in one first-parent commit cannot shrink and is skipped.
 """
 import collections
 import os
 import shutil
 
 from . import gaps
-from .common import SPLIT_AFTER_FAILURES, dump_json, git, load_json
+from .common import SPLIT_AFTER_FAILURES, dump_json, git, load_json, plugin_version
 
 FAILURES_REL = os.path.join(".state", "ingest-failures.json")
 RunPlan = collections.namedtuple("RunPlan", "kind head")
@@ -25,12 +26,22 @@ def load_failures(llake_root):
     return f if isinstance(f, dict) else {}
 
 
-def record_failure(llake_root, base, head, cls):
+def active_failures(llake_root, base):
+    """The counter, only while it belongs to this base and this plugin version; else {}."""
     f = load_failures(llake_root)
-    if cls != "work":
+    if f.get("base") == base and f.get("plugin") == plugin_version():
         return f
-    count = int(f.get("count", 0)) + 1 if f.get("base") == base else 1
-    f = {"base": base, "count": count, "lastHead": head}
+    return {}
+
+
+def record_failure(llake_root, base, head, cls):
+    if cls == "pipeline":
+        clear_failures(llake_root)
+        return {}
+    if cls != "work":
+        return load_failures(llake_root)
+    prev = active_failures(llake_root, base)
+    f = {"base": base, "count": int(prev.get("count", 0)) + 1, "lastHead": head, "plugin": plugin_version()}
     dump_json(_failures_path(llake_root), f)
     return f
 
@@ -52,21 +63,61 @@ def watched_changes(repo, base, head, include):
     return bool(git(repo, "diff", "--name-only", base, head, "--", *include).strip())
 
 
+def commit_churn(repo, sha, include):
+    """Watched churn of one commit against its first parent: added + deleted lines, at least 1 per file (a pure
+    rename or a binary file counts 1). For a merge commit this is the merged branch's content; a root commit
+    (no parent, reachable after a history rewrite) is diffed against the empty tree."""
+    has_parent = len(git(repo, "rev-list", "--parents", "-n", "1", sha).split()) > 1
+    # the empty tree's id depends on the repo's object format (sha1 or sha256), so ask git for it
+    parent = sha + "^1" if has_parent else git(repo, "hash-object", "-t", "tree", "/dev/null").strip()
+    out = git(repo, "diff", "--numstat", parent, sha, "--", *include)
+    total = 0
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        added, deleted = parts[0], parts[1]
+        n = int(added) + int(deleted) if added.isdigit() and deleted.isdigit() else 0
+        total += max(n, 1)
+    return total
+
+
+def split_point(repo, base, target, include):
+    """The split head for base..target (spec §3): the watched first-parent commit whose cumulative churn is
+    closest to half the total, ties to the earlier. Never the last watched commit (the remainder keeps watched
+    content) and never a commit where base..commit nets to no watched change. None when the range cannot
+    shrink: at most one first-parent commit carries watched changes."""
+    commits = list(reversed(first_parent_chain(repo, base, target)))
+    watched = [(c, w) for c, w in ((c, commit_churn(repo, c, include)) for c in commits) if w > 0]
+    if len(watched) < 2:
+        return None
+    total = sum(w for _, w in watched)
+    best, best_d, cum = None, None, 0
+    for c, w in watched[:-1]:
+        cum += w
+        if not watched_changes(repo, base, c, include):
+            continue
+        d = abs(2 * cum - total)
+        if best is None or d < best_d:
+            best, best_d = c, d
+    return best
+
+
 def plan_run(repo, llake_root, include, base, head):
     if not watched_changes(repo, base, head, include):
         return RunPlan("gap-only" if gaps.owed_major(gaps.load(llake_root)) else "empty", head)
-    f = load_failures(llake_root)
-    if f.get("base") == base and int(f.get("count", 0)) >= SPLIT_AFTER_FAILURES:
-        target = f.get("lastHead") or head
-        try:
-            chain = first_parent_chain(repo, base, target)
-        except RuntimeError:
-            target, chain = head, first_parent_chain(repo, base, head)
-        if not chain:
-            return RunPlan("range", head)
-        if len(chain) == 1:
-            return RunPlan("skip", target)
-        return RunPlan("split", chain[len(chain) // 2])
+    f = active_failures(llake_root, base)
+    if int(f.get("count", 0)) < SPLIT_AFTER_FAILURES:
+        return RunPlan("range", head)
+    target = f.get("lastHead") or head
+    try:
+        point = split_point(repo, base, target, include)
+    except RuntimeError:  # lastHead no longer resolves (rewritten history): work from the trigger head
+        target, point = head, split_point(repo, base, head, include)
+    if point is not None:
+        return RunPlan("split", point)
+    if watched_changes(repo, base, target, include):
+        return RunPlan("skip", target)
     return RunPlan("range", head)
 
 

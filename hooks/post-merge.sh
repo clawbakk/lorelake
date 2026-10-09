@@ -334,15 +334,16 @@ if [ "$USE_INGEST_V3" = "1" ]; then
     fi
     trap 'release_v3_lock' EXIT
     claim_v3_lock
-    (
-      sleep "$V3_WATCHDOG"
-      if kill -0 "$MY_PID" 2>/dev/null; then kill -USR1 "$MY_PID" 2>/dev/null; fi
-    ) &
-    WATCHDOG_PID=$!
-    run_ingest_v3 "$V3_AGENT_ID" "$V3_AGENT_DIR" "$V3_AGENT_LOG" "$V3_TIMEOUT"
-    kill_tree "$WATCHDOG_PID"
-    wait "$WATCHDOG_PID" 2>/dev/null
-    rm -f "$V3_PID_FILE"
+    V3_RC=0
+    run_ingest_v3_watched || V3_RC=$?
+    # A finalized split or skip stops short of HEAD: run the rest now, once, under the same lock, with a fresh
+    # agent and deadline. No gate: it already passed the full range, and the finalize just reset the clock.
+    if [ "$V3_RC" -eq "$V3_EXIT_CONTINUE" ]; then
+      next_v3_agent
+      printf "%s | %-13s | continuing: v3 agent %s takes the rest of the range\n" \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "continue" "$V3_AGENT_ID" >> "$LOG_FILE"
+      run_ingest_v3_watched || true
+    fi
   ) &
   BG_PID=$!
   if [ "${LLAKE_POST_MERGE_SYNC:-}" = "1" ]; then

@@ -1,7 +1,7 @@
 """Run planning: kinds, failure counter, split halving, skip; journal recovery; RunState."""
-from v3_helpers import commit, git, make_project, write
-from ingest_v3 import plan, state
-from ingest_v3.common import dump_json, load_json
+from v3_helpers import REPO_ROOT, commit, git, make_project, write
+from ingest_v3 import common, plan, state
+from ingest_v3.common import dump_json, load_json, plugin_version
 
 
 def chain_repo(tmp_path, n):
@@ -36,11 +36,55 @@ def test_work_failures_count_infra_does_not(tmp_path):
     assert plan.record_failure(llake, base, shas[0], "infra") == {}
     assert plan.record_failure(llake, base, shas[0], "work")["count"] == 1
     f = plan.record_failure(llake, base, shas[0], "work")
-    assert f == {"base": base, "count": 2, "lastHead": shas[0]}
+    assert f == {"base": base, "count": 2, "lastHead": shas[0], "plugin": plugin_version()}
     assert plan.record_failure(llake, base, shas[0], "infra")["count"] == 2
     assert plan.record_failure(llake, "other", shas[0], "work")["count"] == 1
     plan.clear_failures(llake)
     assert plan.load_failures(llake) == {}
+
+
+def test_plugin_version_reads_the_manifest():
+    import json
+    assert plugin_version() == json.loads((REPO_ROOT / ".claude-plugin/plugin.json").read_text())["version"]
+
+
+def test_plugin_version_unknown_without_manifest(tmp_path, monkeypatch):
+    monkeypatch.setattr(common, "PLUGIN_MANIFEST", str(tmp_path / "missing.json"))
+    assert common.plugin_version() == "unknown"
+
+
+def test_pipeline_failure_clears_the_counter(tmp_path):
+    repo, llake, base, shas = chain_repo(tmp_path, 2)
+    plan.record_failure(llake, base, shas[-1], "work")
+    plan.record_failure(llake, base, shas[-1], "work")
+    assert plan.record_failure(llake, base, shas[-1], "pipeline") == {}
+    assert plan.load_failures(llake) == {}
+    assert plan.plan_run(repo, llake, ["src/"], base, shas[-1]) == ("range", shas[-1])
+
+
+def test_pipeline_failures_never_reach_split_or_skip(tmp_path):
+    repo, llake, base, shas = chain_repo(tmp_path, 1)
+    for _ in range(5):
+        plan.record_failure(llake, base, shas[0], "pipeline")
+    assert plan.plan_run(repo, llake, ["src/"], base, shas[0]) == ("range", shas[0])
+
+
+def test_counter_from_another_plugin_version_is_ignored(tmp_path, monkeypatch):
+    repo, llake, base, shas = chain_repo(tmp_path, 4)
+    monkeypatch.setattr(plan, "plugin_version", lambda: "0.1.8")
+    for _ in range(3):
+        plan.record_failure(llake, base, shas[1], "work")
+    monkeypatch.setattr(plan, "plugin_version", lambda: "0.1.9")
+    assert plan.plan_run(repo, llake, ["src/"], base, shas[-1]) == ("range", shas[-1])
+    assert plan.active_failures(llake, base) == {}
+    assert plan.record_failure(llake, base, shas[-1], "work") == {
+        "base": base, "count": 1, "lastHead": shas[-1], "plugin": "0.1.9"}
+
+
+def test_counter_without_plugin_key_is_ignored(tmp_path):
+    repo, llake, base, shas = chain_repo(tmp_path, 4)
+    dump_json(llake + "/.state/ingest-failures.json", {"base": base, "count": 3, "lastHead": shas[1]})
+    assert plan.plan_run(repo, llake, ["src/"], base, shas[-1]) == ("range", shas[-1])
 
 
 def test_split_after_two_work_failures_halves_until_skip(tmp_path):
@@ -148,3 +192,82 @@ def test_recovery_with_missing_snapshot_copy_leaves_page_and_run_unrecovered(tmp
     j = load_json(str(dead / "run.json"))
     assert not j.get("recovered") and "wiki/a/x.md" in j["inFlight"]
     assert "wiki/a/x.md" in j["unrecovered"]
+
+
+def merge_repo(tmp_path):
+    """Baqqetto's shape: base -> a trivial direct commit -> a --no-ff merge carrying all watched content.
+    First-parent chain of base..merge is [merge, trivial]."""
+    repo = make_project(tmp_path)
+    base = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "checkout", "-q", "-b", "feature")
+    commit(repo, {"src/a.py": "a\n" * 50}, "feature 1")
+    commit(repo, {"src/b.py": "b\n" * 50}, "feature 2")
+    git(repo, "checkout", "-q", "main")
+    trivial = commit(repo, {"package.json": "{}\n"}, "bump")
+    git(repo, "merge", "-q", "--no-ff", "-m", "merge feature", "feature")
+    merge = git(repo, "rev-parse", "HEAD").strip()
+    return str(repo), str(repo / "llake"), base, trivial, merge
+
+
+def test_commit_churn_counts_a_merge_by_its_first_parent_diff(tmp_path):
+    repo, llake, base, trivial, merge = merge_repo(tmp_path)
+    assert plan.commit_churn(repo, trivial, ["src/"]) == 0
+    assert plan.commit_churn(repo, merge, ["src/"]) == 100
+
+
+def test_commit_churn_counts_a_pure_rename(tmp_path):
+    repo = make_project(tmp_path, src={"src/app.py": "x = 1\n"})
+    git(repo, "mv", "src/app.py", "src/main.py")
+    git(repo, "commit", "-q", "-m", "rename")
+    sha = git(repo, "rev-parse", "HEAD").strip()
+    assert plan.commit_churn(str(repo), sha, ["src/"]) >= 1
+
+
+def test_commit_churn_of_a_root_commit_diffs_against_the_empty_tree(tmp_path):
+    """A parentless commit (reachable after a history rewrite) counts its whole content instead of raising."""
+    repo = make_project(tmp_path, src={"src/app.py": "a = 1\nb = 2\n"})
+    root = git(repo, "rev-list", "--max-parents=0", "HEAD").strip()
+    assert plan.commit_churn(str(repo), root, ["src/"]) == 2
+
+
+def test_split_never_lands_on_a_slice_without_watched_changes(tmp_path):
+    repo, llake, base, trivial, merge = merge_repo(tmp_path)
+    assert plan.split_point(repo, base, merge, ["src/"]) is None
+    plan.record_failure(llake, base, merge, "work")
+    assert plan.plan_run(repo, llake, ["src/"], base, merge) == ("range", merge)
+    plan.record_failure(llake, base, merge, "work")
+    assert plan.plan_run(repo, llake, ["src/"], base, merge) == ("skip", merge)
+
+
+def test_baqqetto_shape_after_pipeline_failures_is_a_full_range(tmp_path):
+    repo, llake, base, trivial, merge = merge_repo(tmp_path)
+    for _ in range(3):
+        plan.record_failure(llake, base, merge, "pipeline")
+    assert plan.plan_run(repo, llake, ["src/"], base, merge) == ("range", merge)
+
+
+def test_split_point_is_weighted_by_churn(tmp_path):
+    repo = make_project(tmp_path)
+    base = git(repo, "rev-parse", "HEAD").strip()
+    commit(repo, {"src/a.py": "a\n"}, "small 1")
+    commit(repo, {"src/b.py": "b\n"}, "small 2")
+    big = commit(repo, {"src/c.py": "c\n" * 100}, "big")
+    last = commit(repo, {"src/d.py": "d\n" * 100}, "last")
+    # by commit count the midpoint would be "small 2"; by churn it is "big"
+    assert plan.split_point(str(repo), base, last, ["src/"]) == big
+
+
+def test_split_skips_a_candidate_whose_slice_nets_to_nothing(tmp_path):
+    repo = make_project(tmp_path, src={"src/app.py": "x = 1\n"})
+    base = git(repo, "rev-parse", "HEAD").strip()
+    change = commit(repo, {"src/app.py": "x = 2\n"}, "change")
+    commit(repo, {"src/app.py": "x = 1\n"}, "revert")  # base..revert nets to no watched change
+    more = commit(repo, {"src/c.py": "c\n" * 10}, "more")
+    assert plan.split_point(str(repo), base, more, ["src/"]) == change
+
+
+def test_unresolvable_last_head_splits_from_head(tmp_path):
+    repo, llake, base, shas = chain_repo(tmp_path, 4)
+    dump_json(llake + "/.state/ingest-failures.json",
+              {"base": base, "count": 2, "lastHead": "0" * 40, "plugin": plugin_version()})
+    assert plan.plan_run(repo, llake, ["src/"], base, shas[-1]) == ("split", shas[1])

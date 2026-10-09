@@ -204,6 +204,15 @@ test_worker_claude_invocation_flags() {
     echo "  FAIL: --strict-mcp-config appeared $strict_count times (expected >=2)"; sed 's/^/    /' "$record"
   else PASS=$((PASS+1)); fi
 
+  # --setting-sources must appear at least twice (once per invocation), so neither agent loads user/project
+  # settings — no ambient allow rules widen the surface and no user-global hooks fire inside the agent.
+  local sources_count
+  sources_count=$(grep -c -- "--setting-sources" "$record")
+  if [ "$sources_count" -lt 2 ]; then
+    FAIL=$((FAIL+1)); FAILED_NAMES+=("worker-flags:setting-sources-twice")
+    echo "  FAIL: --setting-sources appeared $sources_count times (expected >=2)"; sed 's/^/    /' "$record"
+  else PASS=$((PASS+1)); fi
+
   rm -f "$record"
   rm -rf "$proj"
 }

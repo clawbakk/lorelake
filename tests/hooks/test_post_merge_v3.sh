@@ -118,6 +118,16 @@ new_project() {  # new_project <v3|legacy> [v3 JSON]; prints the project dir
   echo "$proj"
 }
 
+plugin_version() {
+  python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$REPO_ROOT/.claude-plugin/plugin.json"
+}
+
+src_commit() {  # src_commit <project> <app.py content> <message>
+  printf '%s\n' "$2" > "$1/src/app.py"
+  git -C "$1" add -A
+  git -C "$1" commit -q -m "$3"
+}
+
 test_v3_range_run() {
   local proj; proj=$(new_project v3); TMP_PROJECTS+=("$proj")
   rename_loader "$proj"
@@ -295,6 +305,47 @@ test_v3_kill_traps_armed_before_the_lock() {
   assert_eq "v3_traps_before_lock" "yes" "$([ "${trap_line:-0}" -lt "${lock_line:-0}" ] && echo yes || echo no)"
 }
 
+# LOR-25: a finalized split leaves the rest of the range to a second run in the same invocation.
+test_v3_split_continues_with_the_remainder() {
+  local proj base head
+  proj=$(new_project v3); TMP_PROJECTS+=("$proj")
+  base=$(cursor "$proj")
+  src_commit "$proj" 'def loadProfile():' "c1"
+  src_commit "$proj" 'def loadProfile(): pass' "c2"
+  src_commit "$proj" 'def loadProfile(): return 1' "c3"
+  src_commit "$proj" 'def loadProfile(): return 2' "c4"
+  head=$(git -C "$proj" rev-parse HEAD)
+  printf '{"base": "%s", "count": 2, "lastHead": "%s", "plugin": "%s"}\n' "$base" "$head" "$(plugin_version)" \
+    > "$proj/llake/.state/ingest-failures.json"
+  run_hook "$proj" V3_STUB_BRIEF="$V3_BRIEF"
+  assert_eq "continue_cursor_at_head" "$head" "$(cursor "$proj")"
+  assert_file_contains "continue_split_completed" "$proj/llake/.state/hooks.log" "v3 split"
+  assert_file_contains "continue_logged" "$proj/llake/.state/hooks.log" "takes the rest of the range"
+  assert_file_contains "continue_range_completed" "$proj/llake/.state/hooks.log" "v3 range"
+  assert_eq "continue_two_agent_dirs" "2" "$(ls "$proj/llake/.state/agents" | wc -l | tr -d ' ')"
+  assert_eq "continue_lock_released" "no" "$([ -d "$proj/llake/.state/post-merge.lock.d" ] && echo yes || echo no)"
+}
+
+# The kill trap and _agent_cleanup read these globals: a continuation must repoint all of them.
+test_v3_next_agent_repoints_trap_globals() {
+  local out
+  out=$(
+    tmp=$(mktemp -d -t llake-v3-next.XXXXXX)
+    generate_agent_id() { echo "next-agent-1"; }
+    AGENTS_DIR="$tmp"; MY_PID=4242
+    # shellcheck source=../../hooks/lib/ingest-v3.sh
+    source "$REPO_ROOT/hooks/lib/ingest-v3.sh"
+    V3_PY_PID=999  # the previous run's (exited, maybe reused) python PID
+    next_v3_agent
+    echo "$V3_AGENT_ID|$V3_AGENT_DIR|$V3_AGENT_LOG|$AGENT_LOG|$CURRENT_PID_FILE|$LLAKE_AGENT_ID|$(cat "$V3_PID_FILE")|py=${V3_PY_PID:-}|$tmp"
+    rm -rf "$tmp"
+  )
+  local tmp="${out##*|}"
+  assert_eq "next_agent_globals" \
+    "next-agent-1|$tmp/next-agent-1|$tmp/next-agent-1/agent.log|$tmp/next-agent-1/agent.log|$tmp/next-agent-1/orchestrator.pid|next-agent-1|4242|py=|$tmp" \
+    "$out"
+}
+
 test_v3_range_run
 test_v3_empty_with_owed_major_runs_gap_only
 test_v3_empty_without_owed_advances_without_agent
@@ -307,6 +358,8 @@ test_v3_watchdog_reverts_and_holds
 test_v3_live_lock_not_reclaimed_when_aged
 test_v3_release_covers_the_acquire_to_claim_gap
 test_v3_kill_traps_armed_before_the_lock
+test_v3_split_continues_with_the_remainder
+test_v3_next_agent_repoints_trap_globals
 
 echo "PASS=$PASS FAIL=$FAIL"
 if [ "$FAIL" -gt 0 ]; then
