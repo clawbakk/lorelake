@@ -272,6 +272,7 @@ EOF
     --tools "Read" \
     --allowedTools "Read" \
     --strict-mcp-config \
+    --setting-sources "" \
     --max-budget-usd 0.50 \
     --output-format stream-json --verbose 2>&1 \
     | python3 "$FORMATTER" --extract-result "$TRIAGE_RESULT_FILE" >> "$AGENT_LOG" 2>&1
@@ -365,6 +366,7 @@ EOF
       --tools "$ALLOWED_TOOLS" \
       --allowedTools "$ALLOWED_TOOLS" \
       --strict-mcp-config \
+      --setting-sources "" \
       --max-budget-usd "$MAX_BUDGET_USD" \
       --output-format stream-json --verbose 2>&1 \
       | python3 "$FORMATTER" >> "$AGENT_LOG" 2>&1
